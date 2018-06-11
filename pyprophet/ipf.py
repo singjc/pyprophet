@@ -4,10 +4,23 @@ import scipy as sp
 import sqlite3
 import sys
 import click
+import itertools
 
 from scipy.stats import rankdata
 from .data_handling import check_sqlite_table
 from shutil import copyfile
+
+def generate_peptide_combinations(arr):
+    """returns a list of all subsets of a list"""
+    
+    combs = []
+    for i in range(0, len(arr)+1):
+        listing = [list(x) for x in itertools.combinations(arr, i)]
+        print(listing)
+        combs.extend(str.join("_", listing[0]))
+
+    return pd.DataFrame(combs)
+
 
 def compute_model_fdr(data_in):
     data = np.asarray(data_in)
@@ -118,7 +131,7 @@ WHERE PRECURSOR.DECOY=0
     return data
 
 
-def read_pyp_transition(path, ipf_max_transition_pep, ipf_h0):
+def read_pyp_transition(path, ipf_max_transition_pep, ipf_h0, ipf_multi):
     click.echo("Info: Reading peptidoform-level data.")
     # only the evidence is restricted to ipf_max_transition_pep, the peptidoform-space is complete
     con = sqlite3.connect(path)
@@ -180,6 +193,13 @@ ORDER BY FEATURE_ID;
     # add h0 (peptide_id: -1) to peptidoform-space if necessary
     if ipf_h0:
         peptidoforms = pd.concat([peptidoforms, pd.DataFrame({'feature_id': peptidoforms['feature_id'].unique(), 'peptide_id': -1})])
+
+
+    if ipf_multi:
+        print(peptidoforms)
+        multi_peptidoforms = peptidoforms.groupby('feature_id').apply(lambda x: generate_peptide_combinations(x['peptide_id'])).reset_index(level='feature_id')
+        print(multi_peptidoforms)
+
 
     # generate transition-peptidoform table
     trans_pf = pd.merge(evidence, peptidoforms, how='outer', on='feature_id')
@@ -319,7 +339,7 @@ def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0
     precursor_data = precursor_inference(precursor_table, ipf_ms1_scoring, ipf_ms2_scoring, ipf_max_precursor_pep, ipf_max_precursor_peakgroup_pep)
 
     # peptidoform level
-    peptidoform_table = read_pyp_transition(infile, ipf_max_transition_pep, ipf_h0)
+    peptidoform_table = read_pyp_transition(infile, ipf_max_transition_pep, ipf_h0, True)
     peptidoform_data = peptidoform_inference(peptidoform_table, precursor_data, ipf_grouped_fdr)
 
     # finalize results and write to table
