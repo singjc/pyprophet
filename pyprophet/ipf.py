@@ -338,6 +338,7 @@ def peptidoform_inference(transition_table, precursor_data, ipf_grouped_fdr):
 
 def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi):
     click.echo("Info: Starting IPF (Inference of PeptidoForms).")
+    click.echo("Info: Assess probabilities of %s coeluting peptidoform(s) generating a peak group." % ipf_multi)
 
     # precursor level
     precursor_table = read_pyp_peakgroup_precursor(infile, ipf_max_peakgroup_pep, ipf_ms1_scoring, ipf_ms2_scoring)
