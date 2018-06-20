@@ -131,7 +131,7 @@ WHERE PRECURSOR.DECOY=0
     return data
 
 
-def read_pyp_transition(path, ipf_max_transition_pep, ipf_h0, ipf_multi, ipf_multi_max):
+def read_pyp_transition(path, ipf_max_transition_pep, ipf_h0, ipf_multi):
     click.echo("Info: Reading peptidoform-level data.")
     # only the evidence is restricted to ipf_max_transition_pep, the peptidoform-space is complete
     con = sqlite3.connect(path)
@@ -194,8 +194,8 @@ ORDER BY FEATURE_ID;
     if ipf_h0:
         peptidoforms = pd.concat([peptidoforms, pd.DataFrame({'feature_id': peptidoforms['feature_id'].unique(), 'peptide_id': -1})])
 
-    if ipf_multi:
-        peptidoforms = peptidoforms.groupby('feature_id').apply(lambda x: generate_peptide_combinations(x['peptide_id'].values, ipf_multi_max)).reset_index(level='feature_id')
+    if ipf_multi > 1:
+        peptidoforms = peptidoforms.groupby('feature_id').apply(lambda x: generate_peptide_combinations(x['peptide_id'].values, ipf_multi)).reset_index(level='feature_id')
         num_peptidoforms = peptidoforms.groupby(['feature_id']).apply(lambda x: pd.Series({'num_peptidoforms': x['multi_peptide_id'].unique().shape[0]})).reset_index(level=['feature_id'])
     else:
         peptidoforms['multi_peptide_id'] = peptidoforms['peptide_id']
@@ -314,6 +314,8 @@ def peptidoform_inference(transition_table, precursor_data, ipf_grouped_fdr):
     click.echo("Info: Preparing peptidoform-level data.")
     transition_data_bm = prepare_transition_bm(transition_table)
 
+    print transition_data_bm
+
     # compute posterior peptidoform probability
     click.echo("Info: Conducting peptidoform-level inference.")
     pf_pp_data = apply_bm(transition_data_bm)
@@ -336,7 +338,7 @@ def peptidoform_inference(transition_table, precursor_data, ipf_grouped_fdr):
     return result
 
 
-def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi, ipf_multi_max):
+def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi):
     click.echo("Info: Starting IPF (Inference of PeptidoForms).")
 
     # precursor level
@@ -344,7 +346,7 @@ def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0
     precursor_data = precursor_inference(precursor_table, ipf_ms1_scoring, ipf_ms2_scoring, ipf_max_precursor_pep, ipf_max_precursor_peakgroup_pep)
 
     # peptidoform level
-    peptidoform_table = read_pyp_transition(infile, ipf_max_transition_pep, ipf_h0, ipf_multi, ipf_multi_max)
+    peptidoform_table = read_pyp_transition(infile, ipf_max_transition_pep, ipf_h0, ipf_multi)
     peptidoform_data = peptidoform_inference(peptidoform_table, precursor_data, ipf_grouped_fdr)
 
     # finalize results and write to table
