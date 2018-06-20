@@ -314,8 +314,6 @@ def peptidoform_inference(transition_table, precursor_data, ipf_grouped_fdr):
     click.echo("Info: Preparing peptidoform-level data.")
     transition_data_bm = prepare_transition_bm(transition_table)
 
-    print transition_data_bm
-
     # compute posterior peptidoform probability
     click.echo("Info: Conducting peptidoform-level inference.")
     pf_pp_data = apply_bm(transition_data_bm)
