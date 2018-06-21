@@ -197,6 +197,11 @@ ORDER BY FEATURE_ID;
     if ipf_multi > 1:
         peptidoforms = peptidoforms.groupby('feature_id').apply(lambda x: generate_peptide_combinations(x['peptide_id'].values, ipf_multi)).reset_index(level='feature_id')
         num_peptidoforms = peptidoforms.groupby(['feature_id']).apply(lambda x: pd.Series({'num_peptidoforms': x['multi_peptide_id'].unique().shape[0]})).reset_index(level=['feature_id'])
+        # ensure that only site-specific transitions are used, else we can't differentiate if peptidoforms are actually present or IPF can't distinguish them
+        transition_specificity = bitmask.groupby('transition_id').size().reset_index(name='num_peptidoforms')
+        transition_specificity = transition_specificity[transition_specificity['num_peptidoforms'] == 1]
+        evidence = evidence.merge(transition_specificity[['transition_id']], how='inner', on='transition_id')
+        bitmask = bitmask.merge(transition_specificity[['transition_id']], how='inner', on='transition_id')
     else:
         peptidoforms['multi_peptide_id'] = peptidoforms['peptide_id']
         peptidoforms['num_multi_peptides'] = 1
