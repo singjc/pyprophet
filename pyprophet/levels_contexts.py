@@ -838,6 +838,8 @@ def merge_oswps(infiles, outfile, templatefile, same_run):
     original_tables = [name[0] for name in original_tables]
     ## Get Score tables table_present
     score_tables = [name for name in original_tables if "SCORE" in name]
+    print("Score Tables")
+    print(score_tables)
     if len(score_tables) > 0:
         create_scores_query = '\n'.join( ['CREATE TABLE ' + score_tbl + ' AS SELECT * FROM sdb.' + score_tbl + ' LIMIT 0;' for score_tbl in score_tables] )
     else:
