@@ -97,7 +97,9 @@ def score(infile, outfile, apply_weights, xeval_fraction, xeval_num_iter, ss_ini
 @click.option('--ipf_max_precursor_peakgroup_pep', default=0.4, show_default=True, type=float, help='Maximum BHM layer 1 integrated precursor peakgroup PEP to consider in IPF.')
 @click.option('--ipf_max_transition_pep', default=0.6, show_default=True, type=float, help='Maximum PEP to consider scored transitions in IPF.')
 @click.option('--ipf_multi', default=1, show_default=True, type=int, help='Maximum combinations of peptidoforms to assess per peak group.')
-def ipf(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi):
+@click.option('--propagate_signal_across_runs/--no-propagate_signal_across_runs', default=False, show_default=True, help='Propagate signal/PEPs across runs for aligned features.')
+@click.option('--across_run_confidence_threshold', default=0.5, show_default=True, type=float, help='Maximum PEP to consider for propagating signal across runs for aligned features.')
+def ipf(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi, propagate_signal_across_runs, across_run_confidence_threshold):
     """
     Infer peptidoforms after scoring of MS1, MS2 and transition-level data.
     """
@@ -107,7 +109,7 @@ def ipf(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_f
     else:
         outfile = outfile
 
-    infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi)
+    infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi, propagate_signal_across_runs, across_run_confidence_threshold)
 
 
 # Peptide-level inference
