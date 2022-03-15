@@ -253,17 +253,17 @@ def transfer_confident_evidence_across_runs(df1, df2, across_run_confidence_thre
 
 def prepare_transition_bm(data, propagate_signal_across_runs, across_run_confidence_threshold):
 	# Propagate peps <= threshold for aligned feature groups across runs
-	if ( propagate_signal_across_runs ){
-  	## Separate out features that need propagation and those that don't to avoid calling apply on the features that don't need propagated peps
-  	non_prop_data = data.loc[ data['feature_id']==data['across_run_feature_id']]
-  	prop_data = data.loc[ data['feature_id']!=data['across_run_feature_id']]
-  	start = time.time()
-  	data_with_confidence = prop_data.groupby(["feature_id"]).apply(transfer_confident_evidence_across_runs, prop_data, across_run_confidence_threshold)
-  	end = time.time()
-  	click.echo(f"INFO: Elapsed time for propagating peps for aligned features across runs {end-start} seconds")
-  	## Concat non prop data with prop data
-  	data = pd.concat([non_prop_data, data_with_confidence], ignore_index=True)
-	}
+	if propagate_signal_across_runs: 
+		## Separate out features that need propagation and those that don't to avoid calling apply on the features that don't need propagated peps
+		non_prop_data = data.loc[ data['feature_id']==data['across_run_feature_id']]
+		prop_data = data.loc[ data['feature_id']!=data['across_run_feature_id']]
+		start = time.time()
+		data_with_confidence = prop_data.groupby(["feature_id"]).apply(transfer_confident_evidence_across_runs, prop_data, across_run_confidence_threshold)
+		end = time.time()
+		click.echo(f"INFO: Elapsed time for propagating peps for aligned features across runs {end-start} seconds")
+		## Concat non prop data with prop data
+		data = pd.concat([non_prop_data, data_with_confidence], ignore_index=True)
+	
 	
 	# peptide_id = -1 indicates h0, i.e. the peak group is wrong!
 	# initialize priors
@@ -416,23 +416,23 @@ def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0
 	peptidoform_table = read_pyp_transition(infile, ipf_max_transition_pep, ipf_h0, ipf_multi)
 	
 	## prepare for propagating signal across runs for aligned features
-	if ( propagate_signal_across_runs ){
-  	across_run_feature_map = get_feature_mapping_across_runs(infile)
-  	peptidoform_table['across_run_feature_id'] = peptidoform_table['feature_id']
-  	
-    # Generate new id to group aligned feature groups
-  	start = time.time()
-  	new_mapping = across_run_feature_map.groupby("reference_feature_id").apply(across_run_feature_merge, peptidoform_table[["across_run_feature_id"]]).tolist()
-  	end = time.time()
-  	click.echo(f"INFO: Elapsed time for generating feature alignment grouping mapping {end-start} seconds")
-  	
-  	# Update across run feature id with aligned feature group ids
-  	start = time.time()
-  	for mapping in new_mapping:
-  		peptidoform_table.loc[ list(mapping.values())[0].tolist() , ["across_run_feature_id"]] = list(mapping.keys())[0]
-  	end = time.time()
-  	click.echo(f"INFO: Elapsed time for update across run feature ids {end-start} seconds")
-	}
+	if propagate_signal_across_runs :
+		across_run_feature_map = get_feature_mapping_across_runs(infile)
+		peptidoform_table['across_run_feature_id'] = peptidoform_table['feature_id']
+
+		# Generate new id to group aligned feature groups
+		start = time.time()
+		new_mapping = across_run_feature_map.groupby("reference_feature_id").apply(across_run_feature_merge, peptidoform_table[["across_run_feature_id"]]).tolist()
+		end = time.time()
+		click.echo(f"INFO: Elapsed time for generating feature alignment grouping mapping {end-start} seconds")
+
+		# Update across run feature id with aligned feature group ids
+		start = time.time()
+		for mapping in new_mapping:
+			peptidoform_table.loc[ list(mapping.values())[0].tolist() , ["across_run_feature_id"]] = list(mapping.keys())[0]
+		end = time.time()
+		click.echo(f"INFO: Elapsed time for update across run feature ids {end-start} seconds")
+	
 	
 	peptidoform_data = peptidoform_inference(peptidoform_table, precursor_data, ipf_grouped_fdr, propagate_signal_across_runs, across_run_confidence_threshold)
 	
