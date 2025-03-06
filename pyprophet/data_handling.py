@@ -64,7 +64,7 @@ def check_sqlite_table(con, table):
     else:
         table_present = False
     c.fetchall()
-
+    
     return(table_present)
 
 

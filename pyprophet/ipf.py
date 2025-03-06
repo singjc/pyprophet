@@ -239,31 +239,67 @@ def prepare_precursor_bm(data):
 	
 	return(precursor_bm_data)
 
-def transfer_confident_evidence_across_runs(df1, df2, across_run_confidence_threshold):
-	# Check to see if current feature data was aligned or not, based on the fact that there should be multiple feature_ids for run across_run_feature_id
+def transfer_confident_evidence_across_runs(df1, across_run_confidence_threshold):
+	# Check to see if current feature data was aligned or not, based on the fact that there should be multiple feature_ids for run alignment_group_id
 	# TODO: find a better way to check for this
-	unique_feature_ids_per_across_run_feature_id = np.unique(df2['feature_id'].loc[ np.isin(df2['across_run_feature_id'], df1['across_run_feature_id']) ])
-	if unique_feature_ids_per_across_run_feature_id.shape[0]==1:
-		new_df = df1
-	else:
-		across_run_data = df2.loc[df2.across_run_feature_id==df1.across_run_feature_id.unique()[0]]
-		new_df = pd.concat([df1, across_run_data.loc[across_run_data.pep <= across_run_confidence_threshold]], ignore_index=True)
-		new_df['feature_id'] = df1['feature_id'].iloc[0]
-	return new_df
+	# unique_feature_ids_per_alignment_group_id = np.unique(df2['feature_id'].loc[ np.isin(df2['alignment_group_id'], df1['alignment_group_id']) ])
+	# if unique_feature_ids_per_alignment_group_id.shape[0]==1:
+		# new_df = df1
+	# else:
+		# across_run_data = df2.loc[df2.alignment_group_id==df1.alignment_group_id.unique()[0]]
+		# new_df = pd.concat([df1, across_run_data.loc[across_run_data.pep <= across_run_confidence_threshold]], ignore_index=True)
+		# new_df['feature_id'] = df1['feature_id'].iloc[0]
+		# new_df.groupby(['feature_id', 'transition_id', 'peptide_id', 'multi_peptide_id', 'num_multi_peptides', 'bmask', 'num_peptidoforms',  'alignment_group_id',  'arct_mask']).apply(min).reset_index(drop=True)
+		
+	# new_df = df1.groupby(['feature_id']).apply(transfer_evidence_for_feature, df1, across_run_confidence_threshold)
+	
+	feature_ids = np.unique(df1['feature_id'])
+	df_list = []
+	for feature_id in feature_ids:
+		tmp_df = df1[(df1['feature_id'] == feature_id) | ((df1['feature_id'] != feature_id) & (df1['pep'] <= across_run_confidence_threshold))]
+		tmp_df['feature_id'] = feature_id
+		tmp_df = tmp_df.groupby(['feature_id', 'transition_id', 'peptide_id', 'multi_peptide_id', 'num_multi_peptides', 'bmask', 'num_peptidoforms',  'alignment_group_id'])['pep', 'precursor_peakgroup_pep'].apply(min).reset_index()	
+		df_list.append(tmp_df)
+	# df_list = [ for feature_id in feature_ids ]
+	# new_df = pd.concat(df_list, ignore_index=True)
+	# new_df = new_df.groupby(['feature_id', 'transition_id', 'peptide_id', 'multi_peptide_id', 'num_multi_peptides', 'bmask', 'num_peptidoforms',  'alignment_group_id',  'arct_mask']).apply(min).reset_index(drop=True)
+	return df_list
 
 def prepare_transition_bm(data, propagate_signal_across_runs, across_run_confidence_threshold):
 	# Propagate peps <= threshold for aligned feature groups across runs
 	if propagate_signal_across_runs: 
 		## Separate out features that need propagation and those that don't to avoid calling apply on the features that don't need propagated peps
-		non_prop_data = data.loc[ data['feature_id']==data['across_run_feature_id']]
-		prop_data = data.loc[ data['feature_id']!=data['across_run_feature_id']]
+		non_prop_data = data.loc[ data['feature_id']==data['alignment_group_id']]
+		prop_data = data.loc[ data['feature_id']!=data['alignment_group_id']]
+		# prop_data[["arct_mask"]] = prop_data[['pep']] <= across_run_confidence_threshold
+		# prop_data.loc[prop_data['pep'] <= across_run_confidence_threshold, 'arct_mask'] = 1
+		# prop_data.loc[prop_data['pep'] <= across_run_confidence_threshold, 'arct_mask'] = 1
+		
+		# start = time.time()
+		# # data_with_confidence = prop_data.groupby(["feature_id"]).apply(transfer_confident_evidence_across_runs, prop_data, across_run_confidence_threshold)
+		# tmp, data_with_confidence = prop_data.groupby(['alignment_group_id']).apply(transfer_confident_evidence_across_runs, across_run_confidence_threshold)
+		# end = time.time()
+		# click.echo(f"INFO: Elapsed time for propagating peps for aligned features across runs {end-start} seconds")
+		# # INFO: Elapsed time for propagating peps for aligned features across runs 1222.6355004310608 seconds ~ 20min
+		# # INFO: Elapsed time for propagating peps for aligned features across runs 1183.378291606903 seconds ~ 20min
+		# # INFO: Elapsed time for propagating peps for aligned features across runs 1177.4823246002197 seconds
+		
 		start = time.time()
-		data_with_confidence = prop_data.groupby(["feature_id"]).apply(transfer_confident_evidence_across_runs, prop_data, across_run_confidence_threshold)
+		alignment_ids = prop_data['alignment_group_id'].unique()
+		data_with_confidence = []
+		for alignment_id in alignment_ids:
+			df1 = prop_data[ prop_data['alignment_group_id']==alignment_id ]
+			alignment_group_df_list = transfer_confident_evidence_across_runs(df1, across_run_confidence_threshold)
+			data_with_confidence = data_with_confidence + alignment_group_df_list
 		end = time.time()
 		click.echo(f"INFO: Elapsed time for propagating peps for aligned features across runs {end-start} seconds")
+		# INFO: Elapsed time for propagating peps for aligned features across runs 5.899710178375244 seconds
 		## Concat non prop data with prop data
-		data = pd.concat([non_prop_data, data_with_confidence], ignore_index=True)
-	
+		data = pd.concat([non_prop_data]+data_with_confidence, ignore_index=True)
+		# start = time.time()
+		# # data = data.groupby(['feature_id', 'transition_id', 'peptide_id', 'multi_peptide_id', 'num_multi_peptides', 'bmask', 'num_peptidoforms',  'alignment_group_id'])['pep', 'precursor_peakgroup_pep'].apply(min).reset_index()
+		# end = time.time()
+		# click.echo(f"INFO: Elapsed time for aggregating min signal of propagated data across runs {end-start} seconds")
 	
 	# peptide_id = -1 indicates h0, i.e. the peak group is wrong!
 	# initialize priors
@@ -274,7 +310,7 @@ def prepare_transition_bm(data, propagate_signal_across_runs, across_run_confide
 	data.loc[data.bmask == 1, 'evidence'] = (1-data.loc[data.bmask == 1, 'pep']) # we have evidence FOR this peptidoform or h0
 	data.loc[data.bmask == 0, 'evidence'] = data.loc[data.bmask == 0, 'pep'] # we have evidence AGAINST this peptidoform or h0
 	
-	data = data[['feature_id', 'across_run_feature_id', 'num_peptidoforms','prior','evidence','multi_peptide_id','peptide_id']]
+	data = data[['feature_id', 'alignment_group_id', 'num_peptidoforms','prior','evidence','multi_peptide_id','peptide_id']]
 	data = data.rename(columns=lambda x: x.replace('multi_peptide_id','hypothesis'))
 	
 	return data
@@ -347,7 +383,7 @@ def peptidoform_inference(transition_table, precursor_data, ipf_grouped_fdr, pro
 	click.echo("Info: Preparing peptidoform-level data.")
 	transition_data_bm = prepare_transition_bm(transition_table, propagate_signal_across_runs, across_run_confidence_threshold)
 	transition_data_bm = transition_data_bm.reset_index(drop=True)
-	# transition_data_bm.rename(columns={'feature_id': 'feature_id_original', 'across_run_feature_id': 'feature_id'}, inplace=True)
+	# transition_data_bm.rename(columns={'feature_id': 'feature_id_original', 'alignment_group_id': 'feature_id'}, inplace=True)
 	# transition_data_bm.loc[ np.logical_and(transition_data_bm.feature_id==1922353247390079399, transition_data_bm.peptide_id!=-1) ]
 	# compute posterior peptidoform probability
 	click.echo("Info: Conducting peptidoform-level inference.")
@@ -367,11 +403,11 @@ def peptidoform_inference(transition_table, precursor_data, ipf_grouped_fdr, pro
 	return result
 
 def get_feature_mapping_across_runs(infile):
-	click.echo("Info: Reading Feature Across Run Alignment Mapping.")
-	# precursors are restricted according to ipf_max_peakgroup_pep to exclude very poor peak groups
+	click.echo("Info: Reading Across Run Feature Alignment Mapping.")
+	
 	con = sqlite3.connect(infile)
 	
-	data = pd.read_sql_query('''SELECT * FROM REFERENCE_EXPERIMENT_ALIGNMENT_FEATURE_MAPPING''', con)
+	data = pd.read_sql_query('''SELECT ALIGNMENT_GROUP_ID, FEATURE_ID FROM ALIGNMENT_GROUP_FEATURE_MAPPING''', con)
 	
 	data.columns = [col.lower() for col in data.columns]
 	con.close()
@@ -395,14 +431,14 @@ def generate_new_feature_id_mapping(grouped_feature_ids, total_set_of_feature_id
 	return new_feature_ids
 
 def across_run_feature_merge(df, df2):
-
+	
 	unique_feature_ids = np.unique(df.to_numpy().flatten())
-
-	new_across_run_feature_id = generate_new_feature_id_mapping([0], [0])
-
-	df_sub_index = df2.loc[np.in1d(df2[["across_run_feature_id"]].to_numpy().flatten(), unique_feature_ids), 'across_run_feature_id'].index
-
-	return {new_across_run_feature_id[0]:df_sub_index}
+	
+	new_alignment_group_id = generate_new_feature_id_mapping([0], [0])
+	
+	df_sub_index = df2.loc[np.in1d(df2[["alignment_group_id"]].to_numpy().flatten(), unique_feature_ids), 'alignment_group_id'].index
+	
+	return {new_alignment_group_id[0]:df_sub_index}
 
 def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0, ipf_grouped_fdr, ipf_max_precursor_pep, ipf_max_peakgroup_pep, ipf_max_precursor_peakgroup_pep, ipf_max_transition_pep, ipf_multi, propagate_signal_across_runs, across_run_confidence_threshold):
 	click.echo("Info: Starting IPF (Inference of PeptidoForms).")
@@ -418,20 +454,31 @@ def infer_peptidoforms(infile, outfile, ipf_ms1_scoring, ipf_ms2_scoring, ipf_h0
 	## prepare for propagating signal across runs for aligned features
 	if propagate_signal_across_runs :
 		across_run_feature_map = get_feature_mapping_across_runs(infile)
-		peptidoform_table['across_run_feature_id'] = peptidoform_table['feature_id']
+		## Convert to type str to avoid update explicity converting to float
+		## Old post, but still seems to be an issue. https://stackoverflow.com/questions/17398216/unwanted-type-conversion-in-pandas-dataframe-update
+		across_run_feature_map['alignment_group_id'] = across_run_feature_map['alignment_group_id'].astype(str)
+		# peptidoform_table['alignment_group_id'] = peptidoform_table['feature_id']
+		# peptidoform_table['alignment_group_id'] = peptidoform_table['alignment_group_id'].astype(str)
+		# peptidoform_table.set_index('feature_id', inplace=True)
+		# across_run_feature_map.set_index('feature_id', inplace=True)
+		# peptidoform_table.update(across_run_feature_map[['alignment_group_id']])
+		# peptidoform_table.reset_index(drop=False, inplace=True)
+		tmp = peptidoform_table.merge(across_run_feature_map, how='left', on='feature_id')
+		tmp.alignment_group_id[tmp.alignment_group_id.isna()] = tmp.feature_id.astype(str)[tmp.alignment_group_id.isna()] # TODO: Very slow and inefficient for large data...
+		peptidoform_table = peptidoform_table.astype({'alignment_group_id':'int64'})
 
-		# Generate new id to group aligned feature groups
-		start = time.time()
-		new_mapping = across_run_feature_map.groupby("reference_feature_id").apply(across_run_feature_merge, peptidoform_table[["across_run_feature_id"]]).tolist()
-		end = time.time()
-		click.echo(f"INFO: Elapsed time for generating feature alignment grouping mapping {end-start} seconds")
+		# # Generate new id to group aligned feature groups
+		# start = time.time()
+		# new_mapping = across_run_feature_map.groupby("reference_feature_id").apply(across_run_feature_merge, peptidoform_table[["alignment_group_id"]]).tolist()
+		# end = time.time()
+		# click.echo(f"INFO: Elapsed time for generating feature alignment grouping mapping {end-start} seconds")
 
-		# Update across run feature id with aligned feature group ids
-		start = time.time()
-		for mapping in new_mapping:
-			peptidoform_table.loc[ list(mapping.values())[0].tolist() , ["across_run_feature_id"]] = list(mapping.keys())[0]
-		end = time.time()
-		click.echo(f"INFO: Elapsed time for update across run feature ids {end-start} seconds")
+		# # Update across run feature id with aligned feature group ids
+		# start = time.time()
+		# for mapping in new_mapping:
+		# 	peptidoform_table.loc[ list(mapping.values())[0].tolist() , ["alignment_group_id"]] = list(mapping.keys())[0]
+		# end = time.time()
+		# click.echo(f"INFO: Elapsed time for update across run feature ids {end-start} seconds")
 	
 	
 	peptidoform_data = peptidoform_inference(peptidoform_table, precursor_data, ipf_grouped_fdr, propagate_signal_across_runs, across_run_confidence_threshold)
