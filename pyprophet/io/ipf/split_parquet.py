@@ -300,13 +300,31 @@ class SplitParquetReader(BaseSplitParquetReader):
         # --------------------------------------------------------------------------
         # Step 2: Single SQL query with CTEs to build evidence, peptidoforms, bitmask, and counts
         # --------------------------------------------------------------------------
-        # Fetch all distinct feature_ids
-        fids = [
-            r[0]
-            for r in con.execute(
-                "SELECT DISTINCT feature_id FROM transitions"
-            ).fetchall()
-        ]
+        # Fetch all distinct non-null feature_ids
+        rows = con.execute(
+            "SELECT DISTINCT feature_id FROM transitions WHERE feature_id IS NOT NULL"
+        ).fetchall()
+        fids = [r[0] for r in rows]
+        if not fids:
+            logger.info("No features to process.")
+            return pd.DataFrame(
+                columns=[
+                    "feature_id",
+                    "transition_id",
+                    "pep",
+                    "peptide_id",
+                    "bmask",
+                    "num_peptidoforms",
+                ]
+            )
+
+        # Prepare optional decoy union for peptidoforms
+        union_sql = (
+            "UNION ALL SELECT feature_id, -1 AS peptide_id FROM peptidoforms_real"
+            if ipf_h0
+            else ""
+        )
+
         merged_chunks = []
 
         # Process in batches of feature_ids
@@ -316,6 +334,7 @@ class SplitParquetReader(BaseSplitParquetReader):
 
             sql = f"""
             WITH
+            -- evidence: transitions passing pep threshold
             evidence AS (
                 SELECT feature_id, transition_id, pep
                 FROM transitions
@@ -325,6 +344,8 @@ class SplitParquetReader(BaseSplitParquetReader):
                 AND SCORE_TRANSITION_SCORE IS NOT NULL
                 AND pep < {pep_threshold}
             ),
+
+            -- real peptidoforms: all peptide_ids per feature
             peptidoforms_real AS (
                 SELECT DISTINCT feature_id, peptide_id
                 FROM transitions
@@ -334,10 +355,14 @@ class SplitParquetReader(BaseSplitParquetReader):
                 AND SCORE_TRANSITION_SCORE IS NOT NULL
                 AND peptide_id IS NOT NULL
             ),
+
+            -- include optional decoys
             peptidoforms AS (
                 SELECT * FROM peptidoforms_real
-                {("UNION ALL SELECT feature_id, -1 AS peptide_id FROM peptidoforms_real") if ipf_h0 else ""}
+                {union_sql}
             ),
+
+            -- bitmask: observed transition-peptidoform pairs
             bitmask AS (
                 SELECT DISTINCT t.transition_id, t.peptide_id, 1 AS bmask
                 FROM transitions t
@@ -347,11 +372,14 @@ class SplitParquetReader(BaseSplitParquetReader):
                 AND t.SCORE_TRANSITION_SCORE IS NOT NULL
                 AND t.peptide_id IS NOT NULL
             ),
+
+            -- counts: number of real peptidoforms per feature
             counts AS (
                 SELECT feature_id, COUNT(DISTINCT peptide_id) AS num_peptidoforms
                 FROM peptidoforms_real
                 GROUP BY feature_id
             )
+
             SELECT
             COALESCE(e.feature_id, p.feature_id) AS feature_id,
             e.transition_id,
@@ -375,7 +403,7 @@ class SplitParquetReader(BaseSplitParquetReader):
                 f"Processed features {i}-{i + len(batch)}: {df_chunk.shape[0]} rows"
             )
 
-        # Concatenate all batches
+        # Concatenate all batches, dedupe, and return
         result = pd.concat(merged_chunks, ignore_index=True)
         result = result.drop_duplicates()
         logger.info(f"Loaded total {len(result)} transition-peptidoform entries")
