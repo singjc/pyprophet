@@ -332,6 +332,10 @@ class SplitParquetReader(BaseSplitParquetReader):
             batch = fids[i : i + chunk_size]
             fid_list = ",".join(str(x) for x in batch)
 
+            logger.debug(
+                f"Processing features {i}-{i + len(batch)}: {len(batch)} features"
+            )
+
             sql = f"""
             WITH
             -- evidence: transitions passing pep threshold
