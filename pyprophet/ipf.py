@@ -460,62 +460,96 @@ def infer_peptidoforms(config: IPFIOConfig):
         None
     """
     logger.info("Starting IPF (Inference of PeptidoForms).")
+
+    batch_size = config.batch_size
+
     reader = ReaderDispatcher.get_reader(config)
 
-    # precursor level
-    precursor_table = reader.read(level="peakgroup_precursor")
-    precursor_data = precursor_inference(
-        precursor_table,
-        config.ipf_ms1_scoring,
-        config.ipf_ms2_scoring,
-        config.ipf_max_precursor_pep,
-        config.ipf_max_precursor_peakgroup_pep,
-    )
+    # get peptide ids
+    peptide_ids = reader.read(level="peptide_ids")["peptide_id"].unique()
 
-    # peptidoform level
-    peptidoform_table = reader.read(level="transition")
+    # Iterate over peptide_ids in batches to avoid memory issues
+    if batch_size > 0:
+        peptide_id_batches = [
+            peptide_ids[i : i + batch_size]
+            for i in range(0, len(peptide_ids), batch_size)
+        ]
+    else:
+        peptide_id_batches = [peptide_ids]
 
-    ## prepare for propagating signal across runs for aligned features
-    if config.propagate_signal_across_runs:
-        across_run_feature_map = reader.read(level="alignment")
-
-        peptidoform_table = peptidoform_table.merge(
-            across_run_feature_map, how="left", on="feature_id"
+    # Initialize an empty list to collect results
+    all_peptidoform_data = []
+    for peptide_ids_batch in peptide_id_batches:
+        logger.info(
+            f"Processing peptide IDs batch: {peptide_ids_batch[0]} to {peptide_ids_batch[-1]} of {len(peptide_ids)}..."
         )
-        ## Fill missing alignment_group_id with feature_id for those that are not aligned
-        peptidoform_table["alignment_group_id"] = peptidoform_table[
-            "alignment_group_id"
-        ].astype(object)
-        mask = peptidoform_table["alignment_group_id"].isna()
-        peptidoform_table.loc[mask, "alignment_group_id"] = peptidoform_table.loc[
-            mask, "feature_id"
-        ].astype(str)
 
-        peptidoform_table = peptidoform_table.astype({"alignment_group_id": "int64"})
+        # precursor level
+        precursor_table = reader.read(
+            level="peakgroup_precursor", peptide_ids=peptide_ids_batch
+        )
+        precursor_data = precursor_inference(
+            precursor_table,
+            config.ipf_ms1_scoring,
+            config.ipf_ms2_scoring,
+            config.ipf_max_precursor_pep,
+            config.ipf_max_precursor_peakgroup_pep,
+        )
 
-    peptidoform_data = peptidoform_inference(
-        peptidoform_table,
-        precursor_data,
-        config.ipf_grouped_fdr,
-        config.propagate_signal_across_runs,
-        config.across_run_confidence_threshold,
-    )
+        # peptidoform level
+        peptidoform_table = reader.read(
+            level="transition", peptide_ids=peptide_ids_batch
+        )
 
-    # finalize results and write to table
-    logger.info("Storing results.")
-    peptidoform_data = peptidoform_data[peptidoform_data["hypothesis"] != -1][
-        ["feature_id", "hypothesis", "precursor_peakgroup_pep", "qvalue", "pep"]
-    ]
-    peptidoform_data.columns = [
-        "FEATURE_ID",
-        "PEPTIDE_ID",
-        "PRECURSOR_PEAKGROUP_PEP",
-        "QVALUE",
-        "PEP",
-    ]
+        ## prepare for propagating signal across runs for aligned features
+        if config.propagate_signal_across_runs:
+            across_run_feature_map = reader.read(level="alignment")
 
-    # Convert feature_id to int64
-    peptidoform_data = peptidoform_data.astype({"FEATURE_ID": "int64"})
+            peptidoform_table = peptidoform_table.merge(
+                across_run_feature_map, how="left", on="feature_id"
+            )
+            ## Fill missing alignment_group_id with feature_id for those that are not aligned
+            peptidoform_table["alignment_group_id"] = peptidoform_table[
+                "alignment_group_id"
+            ].astype(object)
+            mask = peptidoform_table["alignment_group_id"].isna()
+            peptidoform_table.loc[mask, "alignment_group_id"] = peptidoform_table.loc[
+                mask, "feature_id"
+            ].astype(str)
 
+            peptidoform_table = peptidoform_table.astype(
+                {"alignment_group_id": "int64"}
+            )
+
+        peptidoform_data = peptidoform_inference(
+            peptidoform_table,
+            precursor_data,
+            config.ipf_grouped_fdr,
+            config.propagate_signal_across_runs,
+            config.across_run_confidence_threshold,
+        )
+
+        # finalize results and write to table
+        logger.info("Storing results.")
+        peptidoform_data = peptidoform_data[peptidoform_data["hypothesis"] != -1][
+            ["feature_id", "hypothesis", "precursor_peakgroup_pep", "qvalue", "pep"]
+        ]
+        peptidoform_data.columns = [
+            "FEATURE_ID",
+            "PEPTIDE_ID",
+            "PRECURSOR_PEAKGROUP_PEP",
+            "QVALUE",
+            "PEP",
+        ]
+
+        # Convert feature_id to int64
+        peptidoform_data = peptidoform_data.astype({"FEATURE_ID": "int64"})
+
+        all_peptidoform_data.append(peptidoform_data)
+
+    # Concatenate all batches of peptidoform data
+    peptidoform_data = pd.concat(all_peptidoform_data, ignore_index=True)
+
+    # Save results
     writer = WriterDispatcher.get_writer(config)
     writer.save_results(result=peptidoform_data)

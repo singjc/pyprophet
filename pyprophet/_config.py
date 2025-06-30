@@ -476,12 +476,30 @@ class IPFIOConfig(BaseIOConfig):
     propagate_signal_across_runs: bool = False
     ipf_max_alignment_pep: float = 0.7
     across_run_confidence_threshold: float = 0.5
+    batch_size: int = 100_000
+
+    # Generative Bayesian Hierarchical Network Model
+    use_bayenet: bool = False
+    learned_params_path: Optional[str] = None
+    K_max = 150  # Maximum number of peptidoforms (hypotheses) per feature
+    T_max = 100  # Maximum number of transitions per peptidoform (hypothesis)
+    use_beta: bool = True
+    num_steps: int = 5_000
+    optim_args: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "lr": 1e-3,
+            "betas": (0.9, 0.999),
+            "clip_norm": 5.0,  # clip gradients to norm ≤ 5
+        }
+    )
+    report_pdf_path: Optional[str] = "ipf_gen_bhm_report.pdf"
 
     @classmethod
     def from_cli_args(
         cls,
         infile,
         outfile,
+        pretrained_model,
         subsample_ratio,
         level,
         context,
@@ -496,13 +514,25 @@ class IPFIOConfig(BaseIOConfig):
         propagate_signal_across_runs,
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
+        batch_size,
+        use_bayenet,
+        use_beta,
+        num_steps,
+        learning_rate,
+        betas,
     ):
         """
         Creates a configuration object from command-line arguments.
         """
+        optim_args = {
+            "lr": learning_rate,
+            "betas": betas,
+            "clip_norm": 5.0,  # clip gradients to norm ≤ 5
+        }
         return cls(
             infile=infile,
             outfile=outfile,
+            learned_params_path=pretrained_model,
             subsample_ratio=subsample_ratio,
             level=level,
             context=context,
@@ -517,6 +547,11 @@ class IPFIOConfig(BaseIOConfig):
             propagate_signal_across_runs=propagate_signal_across_runs,
             ipf_max_alignment_pep=ipf_max_alignment_pep,
             across_run_confidence_threshold=across_run_confidence_threshold,
+            batch_size=batch_size,
+            use_bayenet=use_bayenet,
+            use_beta=use_beta,
+            num_steps=num_steps,
+            optim_args=optim_args,
         )
 
 

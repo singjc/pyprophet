@@ -1,9 +1,10 @@
 import click
 from loguru import logger
 
-from .util import write_logfile, measure_memory_usage_and_time
+from .util import transform_betas, write_logfile, measure_memory_usage_and_time
 from .._config import IPFIOConfig
 from ..ipf import infer_peptidoforms
+from ..ipf_bayenet import infer_peptidoforms as infer_peptidoforms_bayenet
 from ..glyco.glycoform import infer_glycoforms
 
 
@@ -22,6 +23,12 @@ from ..glyco.glycoform import infer_glycoforms
     "outfile",
     type=click.Path(exists=False),
     help="PyProphet output file. Valid formats are .osw, .parquet. Must be the same format as input file.",
+)
+@click.option(
+    "--pth",
+    "pretrained_model",
+    type=click.Path(exists=True),
+    help="Pretrained model file. Must be a .pth file.",
 )
 # IPF parameters
 @click.option(
@@ -96,6 +103,49 @@ from ..glyco.glycoform import infer_glycoforms
     type=float,
     help="Maximum PEP to consider for propagating signal across runs for aligned features.",
 )
+@click.option(
+    "--batch_size",
+    default=100_000,
+    show_default=True,
+    type=int,
+    help="Batch size for processing the input file. Adjust based on available memory.",
+)
+# Bayesian Network Model Parameters
+@click.option(
+    "--use_bayenet/--no-use_bayenet",
+    default=False,
+    show_default=True,
+    help="Use generative Bayesian network model for IPF. If disabled, uses a flat Bayesian hierarchical model.",
+)
+@click.option(
+    "--use_beta/--no-use_beta",
+    default=True,
+    show_default=True,
+    help="Use beta log-likelihoods for the Bayesian network model. If disabled, uses Gaussian log-likelihoods.",
+)
+@click.option(
+    "--num_steps",
+    default=350,
+    show_default=True,
+    type=int,
+    help="Number of steps for the Bayesian network model optimization for stochastic variational inference. Adjust based on convergence needs.",
+)
+@click.option(
+    "--eta",
+    "learning_rate",
+    default=1e-3,
+    show_default=True,
+    type=float,
+    help="Maximum PEP to consider for good alignments.",
+)
+@click.option(
+    "--betas",
+    default=(0.9, 0.999),
+    show_default=True,
+    type=(float, float),
+    help="Beta parameters for the optimizer used in the Bayesian network model.",
+    callback=transform_betas,
+)
 @click.pass_context
 @measure_memory_usage_and_time
 @logger.catch(reraise=True)
@@ -103,6 +153,7 @@ def ipf(
     ctx,
     infile,
     outfile,
+    pretrained_model,
     ipf_ms1_scoring,
     ipf_ms2_scoring,
     ipf_h0,
@@ -114,6 +165,12 @@ def ipf(
     propagate_signal_across_runs,
     ipf_max_alignment_pep,
     across_run_confidence_threshold,
+    batch_size,
+    use_bayenet,
+    use_beta,
+    num_steps,
+    learning_rate,
+    betas,
 ):
     """
     Infer peptidoforms after scoring of MS1, MS2 and transition-level data.
@@ -133,6 +190,7 @@ def ipf(
     config = IPFIOConfig.from_cli_args(
         infile,
         outfile,
+        pretrained_model,
         1,  # Subsample ratio is not applicable for IPF
         "ipf",  # Level is not applicable for IPF
         "ipf",
@@ -147,11 +205,20 @@ def ipf(
         propagate_signal_across_runs,
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
+        batch_size=batch_size,
+        use_bayenet=use_bayenet,
+        use_beta=use_beta,
+        num_steps=num_steps,
+        learning_rate=learning_rate,
+        betas=betas,
     )
     write_logfile(
         ctx.obj["LOG_LEVEL"], f"{config.prefix}_pyp_ipf.log", ctx.obj["LOG_HEADER"]
     )
-    infer_peptidoforms(config)
+    if use_bayenet:  # Generative BHM
+        infer_peptidoforms_bayenet(config)
+    else:  # Base flat BHM
+        infer_peptidoforms(config)
 
 
 # Infer glycoforms

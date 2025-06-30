@@ -41,3 +41,8 @@ nosetests.xml
 # docs
 docs/_build/*
 docs/api/generated/*
+
+# data
+sandbox/*.zarr/*
+sandbox/*.parquet
+sandbox/*.oswpq/*

@@ -1,7 +1,7 @@
 import os
 import glob
 from shutil import copyfile
-from typing import Literal
+from typing import Literal, List
 import pandas as pd
 import pyarrow as pa
 import duckdb
@@ -40,24 +40,30 @@ class SplitParquetReader(BaseSplitParquetReader):
         super().__init__(config)
 
     def read(
-        self, level: Literal["peakgroup_precursor", "transition", "alignment"]
+        self,
+        level: Literal["peakgroup_precursor", "transition", "alignment", "peptide_ids"],
+        peptide_ids: List[int] = None,
     ) -> pd.DataFrame:
         con = duckdb.connect()
         try:
             self._init_duckdb_views(con)
 
             if level == "peakgroup_precursor":
-                return self._read_pyp_peakgroup_precursor(con)
+                return self._read_pyp_peakgroup_precursor(con, peptide_ids)
             elif level == "transition":
-                return self._read_pyp_transition(con)
+                return self._read_pyp_transition(con, peptide_ids)
             elif level == "alignment":
                 return self._fetch_alignment_features(con)
+            elif level == "peptide_ids":
+                return self._fetch_peptide_ids(con)
             else:
                 raise click.ClickException(f"Unsupported level: {level}")
         finally:
             con.close()
 
-    def _read_pyp_peakgroup_precursor(self, con) -> pd.DataFrame:
+    def _read_pyp_peakgroup_precursor(
+        self, con, peptide_ids: List[int] = None
+    ) -> pd.DataFrame:
         cfg = self.config
         ipf_ms1 = cfg.ipf_ms1_scoring
         ipf_ms2 = cfg.ipf_ms2_scoring
@@ -80,6 +86,13 @@ class SplitParquetReader(BaseSplitParquetReader):
 
         all_precursor_cols = get_parquet_column_names(precursor_files[0])
         all_transition_cols = get_parquet_column_names(transition_files[0])
+
+        if peptide_ids is not None:
+            peptide_ids_filter_query = (
+                f" AND IPF_PEPTIDE_ID IN ({','.join(map(str, peptide_ids))})"
+            )
+        else:
+            peptide_ids_filter_query = ""
 
         # con.execute(
         #     f"CREATE VIEW precursors AS SELECT * FROM read_parquet({precursor_files})"
@@ -104,7 +117,8 @@ class SplitParquetReader(BaseSplitParquetReader):
                 FROM transition
                 WHERE TRANSITION_TYPE = '' AND TRANSITION_DECOY = 0
             ) t ON p.FEATURE_ID = t.FEATURE_ID
-            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold};
+            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold}
+            {peptide_ids_filter_query}
             """
 
         elif ipf_ms1 and not ipf_ms2:
@@ -116,7 +130,8 @@ class SplitParquetReader(BaseSplitParquetReader):
             SELECT p.FEATURE_ID, p.SCORE_MS2_PEP AS MS2_PEAKGROUP_PEP,
                 p.SCORE_MS1_PEP AS MS1_PRECURSOR_PEP, NULL AS MS2_PRECURSOR_PEP
             FROM precursors p
-            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold};
+            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold}
+            {peptide_ids_filter_query}
             """
 
         elif ipf_ms1 and ipf_ms2:
@@ -139,7 +154,8 @@ class SplitParquetReader(BaseSplitParquetReader):
                 FROM transition
                 WHERE TRANSITION_TYPE = '' AND TRANSITION_DECOY = 0
             ) t ON p.FEATURE_ID = t.FEATURE_ID
-            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold};
+            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold}
+            {peptide_ids_filter_query}
             """
 
         else:
@@ -153,14 +169,17 @@ class SplitParquetReader(BaseSplitParquetReader):
             SELECT p.FEATURE_ID, p.SCORE_MS2_PEP AS MS2_PEAKGROUP_PEP,
                 NULL AS MS1_PRECURSOR_PEP, NULL AS MS2_PRECURSOR_PEP
             FROM precursors p
-            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold};
+            WHERE p.PRECURSOR_DECOY = 0 AND p.SCORE_MS2_PEP < {pep_threshold}
+            {peptide_ids_filter_query}
             """
 
         df = con.execute(query).df()
         df.columns = [col.lower() for col in df.columns]
         return df
 
-    def _read_pyp_transition(self, con, chunk_size: int = 1000) -> pd.DataFrame:
+    def _read_pyp_transition(
+        self, con, peptide_ids: List[int] = None, chunk_size: int = 100_000
+    ) -> pd.DataFrame:
         """
         Read and merge transition-peptidoform data in chunks to limit peak memory usage.
 
@@ -192,6 +211,13 @@ class SplitParquetReader(BaseSplitParquetReader):
             raise click.ClickException(
                 "IPF_PEPTIDE_ID column is required in transition features."
             )
+
+        if peptide_ids is not None:
+            peptide_ids_filter_query = (
+                f" AND peptide_id IN ({','.join(map(str, peptide_ids))})"
+            )
+        else:
+            peptide_ids_filter_query = ""
 
         # # Load all transition files into DuckDB view
         # con.execute(
@@ -288,7 +314,7 @@ class SplitParquetReader(BaseSplitParquetReader):
             SELECT
             FEATURE_ID,
             TRANSITION_ID,
-            IPF_PEPTIDE_ID   AS peptide_id,
+            IPF_PEPTIDE_ID AS peptide_id,
             SCORE_TRANSITION_PEP  AS pep,
             SCORE_TRANSITION_SCORE,
             TRANSITION_TYPE,
@@ -358,6 +384,7 @@ class SplitParquetReader(BaseSplitParquetReader):
                 AND TRANSITION_DECOY       = 0
                 AND SCORE_TRANSITION_SCORE IS NOT NULL
                 AND peptide_id IS NOT NULL
+                {peptide_ids_filter_query}
             ),
 
             -- include optional decoys
@@ -375,12 +402,14 @@ class SplitParquetReader(BaseSplitParquetReader):
                 AND t.TRANSITION_DECOY       = 0
                 AND t.SCORE_TRANSITION_SCORE IS NOT NULL
                 AND t.peptide_id IS NOT NULL
+                {peptide_ids_filter_query}
             ),
 
             -- counts: number of real peptidoforms per feature
             counts AS (
                 SELECT feature_id, COUNT(DISTINCT peptide_id) AS num_peptidoforms
                 FROM peptidoforms_real
+                {peptide_ids_filter_query.replace("AND", "WHERE", 1)}
                 GROUP BY feature_id
             )
 
@@ -447,6 +476,34 @@ class SplitParquetReader(BaseSplitParquetReader):
         logger.info(f"Loaded {len(df)} aligned feature group mappings.")
         logger.debug(f"Unique alignment groups: {df['alignment_group_id'].nunique()}")
 
+        return df
+
+    def _fetch_peptide_ids(self, con) -> pd.DataFrame:
+        logger.info("Reading Peptide IDs ...")
+
+        if self.config.file_type == "parquet_split_multi":
+            precursor_files = glob.glob(
+                os.path.join(self.infile, "*.oswpq", "precursors_features.parquet")
+            )
+        else:
+            precursor_files = [os.path.join(self.infile, "precursors_features.parquet")]
+
+        if not precursor_files:
+            raise click.ClickException("No precursors_features.parquet files found.")
+
+        # Read all peptide IDs from the first file
+        con.execute(
+            f"""
+            CREATE OR REPLACE VIEW peptides AS 
+            SELECT DISTINCT IPF_PEPTIDE_ID AS PEPTIDE_ID 
+            FROM read_parquet({precursor_files})
+        """
+        )
+
+        df = con.execute("SELECT * FROM peptides").df()
+        df.columns = [col.lower() for col in df.columns]
+
+        logger.info(f"Loaded {len(df)} unique peptide IDs.")
         return df
 
 

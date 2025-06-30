@@ -367,6 +367,25 @@ def transform_pi0_lambda(ctx, param, value):
     return pi0_lambda
 
 
+def transform_betas(ctx, param, value):
+    """
+    transform_betas passed from CLI to tuple of floats.
+    """
+    if isinstance(value, str):
+        try:
+            value = tuple(float(x) for x in value.split(","))
+        except ValueError:
+            raise click.ClickException(
+                "Invalid format for betas. Use comma-separated values, e.g., '0.1,0.2,0.3'."
+            )
+    elif isinstance(value, (list, tuple)):
+        value = tuple(float(x) for x in value)
+    else:
+        raise click.ClickException("Betas must be a string or a list/tuple of floats.")
+
+    return value
+
+
 def transform_threads(ctx, param, value):
     if value == -1:
         value = multiprocessing.cpu_count()

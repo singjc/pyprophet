@@ -868,7 +868,6 @@ class OSWWriter(BaseOSWWriter):
             self._build_score_column_selection_and_joins(column_info)
         )
 
-        # First get the peptide table and process it with pyopenms
         logger.info("Generating peptide unimod to codename mapping")
         with sqlite3.connect(self.config.infile) as sql_conn:
             peptide_df = pd.read_sql_query(
@@ -878,7 +877,6 @@ class OSWWriter(BaseOSWWriter):
             unimod_to_codename
         )
 
-        # Create the merged mapping as you did in your example
         unimod_mask = peptide_df["MODIFIED_SEQUENCE"].str.contains("UniMod")
         merged_df = pd.merge(
             peptide_df[unimod_mask][["codename", "ID"]],

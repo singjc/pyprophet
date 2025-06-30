@@ -2,12 +2,12 @@ import os
 import pickle
 from shutil import copyfile
 import sqlite3
-from typing import Literal
+from typing import Literal, List
 import duckdb
 import pandas as pd
 import click
 from loguru import logger
-from ..util import check_sqlite_table, check_duckdb_table
+from ..util import check_sqlite_table, check_duckdb_table, unimod_to_codename
 from .._base import BaseOSWReader, BaseOSWWriter
 from ..._config import IPFIOConfig
 
@@ -33,8 +33,12 @@ class OSWReader(BaseOSWReader):
     def __init__(self, config: IPFIOConfig):
         super().__init__(config)
 
+        self.prec_peptide_mapping = self._fetch_precursor_peptide_mapping()
+
     def read(
-        self, level: Literal["peakgroup_precursor", "transition", "alignment"]
+        self,
+        level: Literal["peakgroup_precursor", "transition", "alignment", "peptide_ids"],
+        peptide_ids: List[int] = None,
     ) -> pd.DataFrame:
         self._create_indexes()
         try:
@@ -42,13 +46,13 @@ class OSWReader(BaseOSWReader):
             con.execute("INSTALL sqlite_scanner;")
             con.execute("LOAD sqlite_scanner;")
             con.execute(f"ATTACH DATABASE '{self.infile}' AS osw (TYPE sqlite);")
-            return self._read_using_duckdb(con, level)
+            return self._read_using_duckdb(con, level, peptide_ids)
         except ModuleNotFoundError as e:
             logger.warning(
                 f"Warn: DuckDB sqlite_scanner failed, falling back to SQLite. Reason: {e}",
             )
             con = sqlite3.connect(self.infile)
-            return self._read_using_sqlite(con, level)
+            return self._read_using_sqlite(con, level, peptide_ids)
 
     def _create_indexes(self):
         """
@@ -82,27 +86,96 @@ class OSWReader(BaseOSWReader):
                 f"Failed to create indexes via SQLite fallback: {e}"
             )
 
+    def _fetch_precursor_peptide_mapping(self):
+        """
+        Fetch precursor to peptide mapping.
+        """
+        with sqlite3.connect(self.config.infile) as con:
+            peptide_df = pd.read_sql_query(
+                "SELECT ID, MODIFIED_SEQUENCE FROM PEPTIDE", con
+            )
+            precursor_df = pd.read_sql_query(
+                "SELECT PRECURSOR_ID as precursor_id, PEPTIDE_ID AS ID_unimod FROM PRECURSOR_PEPTIDE_MAPPING",
+                con,
+            )
+
+        peptide_df["codename"] = peptide_df["MODIFIED_SEQUENCE"].apply(
+            unimod_to_codename
+        )
+
+        unimod_mask = peptide_df["MODIFIED_SEQUENCE"].str.contains("UniMod")
+        merged_df = pd.merge(
+            peptide_df[unimod_mask][["codename", "ID"]],
+            peptide_df[~unimod_mask][["codename", "ID"]],
+            on="codename",
+            suffixes=("_unimod", "_codename"),
+            how="outer",
+        )
+
+        # Fill NaN values in the 'ID_codename' column with the 'ID_unimod' values
+        merged_df["ID_codename"] = merged_df["ID_codename"].fillna(
+            merged_df["ID_unimod"]
+        )
+        # Fill NaN values in the 'ID_unimod' column with the 'ID_codename' values
+        merged_df["ID_unimod"] = merged_df["ID_unimod"].fillna(merged_df["ID_codename"])
+
+        merged_df["ID_unimod"] = merged_df["ID_unimod"].astype(int)
+        merged_df["ID_codename"] = merged_df["ID_codename"].astype(int)
+
+        prec_peptide_mapping = pd.merge(
+            precursor_df,
+            merged_df[["ID_unimod", "ID_codename"]],
+            on="ID_unimod",
+            how="left",
+        )
+        return prec_peptide_mapping.rename(
+            columns={
+                "ID_unimod": "peptide_id",
+                "ID_codename": "ipf_peptide_id",
+            }
+        )
+
     def _read_using_duckdb(
-        self, con, level: Literal["peakgroup_precursor", "transition", "alignment"]
+        self,
+        con,
+        level: Literal["peakgroup_precursor", "transition", "alignment"],
+        peptide_ids: List[int] = None,
     ):
         if level == "peakgroup_precursor":
-            return self._read_pyp_peakgroup_precursor_duckdb(con)
+            return self._read_pyp_peakgroup_precursor_duckdb(con, peptide_ids)
         elif level == "transition":
-            return self._read_pyp_transition_duckdb(con)
+            return self._read_pyp_transition_duckdb(con, peptide_ids)
         elif level == "alignment":
             return self._fetch_alignment_features_duckdb(con)
+        elif level == "peptide_ids":
+            return (
+                self.prec_peptide_mapping[["ipf_peptide_id"]]
+                .rename(columns={"ipf_peptide_id": "peptide_id"})
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
         else:
             raise click.ClickException(f"Unsupported level: {level}")
 
     def _read_using_sqlite(
-        self, con, level: Literal["peakgroup_precursor", "transition", "alignment"]
+        self,
+        con,
+        level: Literal["peakgroup_precursor", "transition", "alignment"],
+        peptide_ids: List[int] = None,
     ):
         if level == "peakgroup_precursor":
-            return self._read_pyp_peakgroup_precursor_sqlite(con)
+            return self._read_pyp_peakgroup_precursor_sqlite(con, peptide_ids)
         elif level == "transition":
-            return self._read_pyp_transition_sqlite(con)
+            return self._read_pyp_transition_sqlite(con, peptide_ids)
         elif level == "alignment":
             return self._fetch_alignment_features_sqlite(con)
+        elif level == "peptide_ids":
+            return (
+                self.prec_peptide_mapping[["ipf_peptide_id"]]
+                .rename(columns={"ipf_peptide_id": "peptide_id"})
+                .drop_duplicates()
+                .reset_index(drop=True)
+            )
         else:
             raise click.ClickException(f"Unsupported level: {level}")
 
@@ -116,7 +189,22 @@ class OSWReader(BaseOSWReader):
         ).fetchdf()
         return tables
 
-    def _read_pyp_peakgroup_precursor_duckdb(self, con):
+    def _fetch_precursor_ids_duckdb(self, con, peptide_ids: List[int] = None):
+        """
+        Fetch precursor IDs based on peptide IDs.
+        If peptide_ids is None, fetch all precursor IDs.
+        """
+        # use self.prec_peptide_mapping to get the precursor IDs
+        ipf_peptide_id_mask = self.prec_peptide_mapping["ipf_peptide_id"].isin(
+            peptide_ids
+        )
+        return (
+            self.prec_peptide_mapping.loc[ipf_peptide_id_mask, "precursor_id"]
+            .unique()
+            .tolist()
+        )
+
+    def _read_pyp_peakgroup_precursor_duckdb(self, con, peptide_ids: List[int] = None):
         cfg = self.config  # IPFIOConfig instance
         ipf_ms1 = cfg.ipf_ms1_scoring
         ipf_ms2 = cfg.ipf_ms2_scoring
@@ -124,6 +212,14 @@ class OSWReader(BaseOSWReader):
 
         # precursors are restricted according to ipf_max_peakgroup_pep to exclude very poor peak groups
         logger.info("Reading precursor-level data ...")
+
+        precursor_ids_filter_query = ""
+        if peptide_ids is not None:
+            precursor_ids = self._fetch_precursor_ids_duckdb(con, peptide_ids)
+            precursor_ids_str = ",".join(map(str, precursor_ids))
+            precursor_ids_filter_query = (
+                f"AND osw.FEATURE.PRECURSOR_ID IN ({precursor_ids_str})"
+            )
 
         if not ipf_ms1 and ipf_ms2:  # only use MS2 precursors
             if not check_duckdb_table(
@@ -147,6 +243,7 @@ class OSWReader(BaseOSWReader):
                     WHERE TRANSITION.TYPE='' AND TRANSITION.DECOY=0
                 ) AS SCORE_TRANSITION ON FEATURE.ID = SCORE_TRANSITION.FEATURE_ID
                 WHERE PRECURSOR.DECOY=0 AND SCORE_MS2.PEP < {pep_threshold}
+                {precursor_ids_filter_query}
             """
 
         elif ipf_ms1 and not ipf_ms2:  # only use MS1 precursors
@@ -167,6 +264,7 @@ class OSWReader(BaseOSWReader):
                 INNER JOIN osw.SCORE_MS1 ON FEATURE.ID = SCORE_MS1.FEATURE_ID
                 INNER JOIN osw.SCORE_MS2 ON FEATURE.ID = SCORE_MS2.FEATURE_ID
                 WHERE PRECURSOR.DECOY=0 AND SCORE_MS2.PEP < {pep_threshold}
+                {precursor_ids_filter_query}
             """
 
         elif ipf_ms1 and ipf_ms2:  # use both MS1 and MS2 precursors
@@ -195,6 +293,7 @@ class OSWReader(BaseOSWReader):
                     WHERE TRANSITION.TYPE='' AND TRANSITION.DECOY=0
                 ) AS SCORE_TRANSITION ON FEATURE.ID = SCORE_TRANSITION.FEATURE_ID
                 WHERE PRECURSOR.DECOY=0 AND SCORE_MS2.PEP < {pep_threshold}
+                {precursor_ids_filter_query}
             """
 
         else:  # do not use any precursor information
@@ -214,15 +313,23 @@ class OSWReader(BaseOSWReader):
                 INNER JOIN osw.FEATURE ON PRECURSOR.ID = FEATURE.PRECURSOR_ID
                 INNER JOIN osw.SCORE_MS2 ON FEATURE.ID = SCORE_MS2.FEATURE_ID
                 WHERE PRECURSOR.DECOY=0 AND SCORE_MS2.PEP < {pep_threshold}
+                {precursor_ids_filter_query}
             """
 
         df = con.execute(query).fetchdf()
         return df.rename(columns=str.lower)
 
-    def _read_pyp_transition_duckdb(self, con):
+    def _read_pyp_transition_duckdb(self, con, peptide_ids: List[int] = None):
         rc = self.config
         ipf_h0 = rc.ipf_h0
         pep_threshold = rc.ipf_max_transition_pep
+
+        peptide_ids_filter_query = ""
+        if peptide_ids is not None:
+            peptide_ids_str = ",".join(map(str, peptide_ids))
+            peptide_ids_filter_query = (
+                f"AND osw.TRANSITION_PEPTIDE_MAPPING.PEPTIDE_ID IN ({peptide_ids_str})"
+            )
 
         # only the evidence is restricted to ipf_max_transition_pep, the peptidoform-space is complete
         logger.info("Info: Reading peptidoform-level data ...")
@@ -236,30 +343,33 @@ class OSWReader(BaseOSWReader):
                 AND TRANSITION.DECOY = 0
                 AND PEP < {pep_threshold}
             """,
-            "bitmask": """
+            "bitmask": f"""
                 SELECT DISTINCT TRANSITION.ID AS TRANSITION_ID, PEPTIDE_ID, 1 AS BMASK
                 FROM osw.SCORE_TRANSITION
                 INNER JOIN osw.TRANSITION ON SCORE_TRANSITION.TRANSITION_ID = TRANSITION.ID
                 INNER JOIN osw.TRANSITION_PEPTIDE_MAPPING ON TRANSITION.ID = TRANSITION_PEPTIDE_MAPPING.TRANSITION_ID
                 WHERE TRANSITION.TYPE != ''
                 AND TRANSITION.DECOY = 0
+                {peptide_ids_filter_query}
             """,
-            "num_peptidoforms": """
+            "num_peptidoforms": f"""
                 SELECT FEATURE_ID, COUNT(DISTINCT PEPTIDE_ID) AS NUM_PEPTIDOFORMS
                 FROM osw.SCORE_TRANSITION
                 INNER JOIN osw.TRANSITION ON SCORE_TRANSITION.TRANSITION_ID = TRANSITION.ID
                 INNER JOIN osw.TRANSITION_PEPTIDE_MAPPING ON TRANSITION.ID = TRANSITION_PEPTIDE_MAPPING.TRANSITION_ID
                 WHERE TRANSITION.TYPE != ''
                 AND TRANSITION.DECOY = 0
+                {peptide_ids_filter_query}
                 GROUP BY FEATURE_ID
             """,
-            "peptidoforms": """
+            "peptidoforms": f"""
                 SELECT DISTINCT FEATURE_ID, PEPTIDE_ID
                 FROM osw.SCORE_TRANSITION
                 INNER JOIN osw.TRANSITION ON SCORE_TRANSITION.TRANSITION_ID = TRANSITION.ID
                 INNER JOIN osw.TRANSITION_PEPTIDE_MAPPING ON TRANSITION.ID = TRANSITION_PEPTIDE_MAPPING.TRANSITION_ID
                 WHERE TRANSITION.TYPE != ''
                 AND TRANSITION.DECOY = 0
+                {peptide_ids_filter_query}
             """,
         }
 
@@ -315,7 +425,11 @@ class OSWReader(BaseOSWReader):
                 SELECT DISTINCT * FROM osw.FEATURE_MS2_ALIGNMENT
             ) AS FEATURE_MS2_ALIGNMENT
             INNER JOIN (
-                SELECT DISTINCT *, MIN(QVALUE) 
+                SELECT 
+                    FEATURE_ID,
+                    MIN(QVALUE) AS QVALUE,
+                    ANY_VALUE(SCORE) AS SCORE,
+                    ANY_VALUE(PEP) AS PEP
                 FROM osw.SCORE_ALIGNMENT 
                 GROUP BY FEATURE_ID
             ) AS SCORE_ALIGNMENT 
@@ -332,7 +446,7 @@ class OSWReader(BaseOSWReader):
     # SQLite fallback
     # ----------------------------
 
-    def _read_pyp_peakgroup_precursor_sqlite(self, con):
+    def _read_pyp_peakgroup_precursor_sqlite(self, con, peptide_ids: List[int] = None):
         cfg = self.config
         ipf_ms1 = cfg.ipf_ms1_scoring
         ipf_ms2 = cfg.ipf_ms2_scoring
@@ -425,7 +539,7 @@ class OSWReader(BaseOSWReader):
         df = pd.read_sql_query(query, con, params=[pep_threshold])
         return df.rename(columns=str.lower)
 
-    def _read_pyp_transition_sqlite(self, con):
+    def _read_pyp_transition_sqlite(self, con, peptide_ids: List[int] = None):
         rc = self.config
         ipf_h0 = rc.ipf_h0
         pep_threshold = rc.ipf_max_transition_pep
