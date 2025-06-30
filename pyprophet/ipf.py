@@ -465,36 +465,50 @@ def infer_peptidoforms(config: IPFIOConfig):
 
     reader = ReaderDispatcher.get_reader(config)
 
+    # precursor level
+    precursor_table = reader.read(level="peakgroup_precursor", peptide_ids=None)
+    precursor_data = precursor_inference(
+        precursor_table,
+        config.ipf_ms1_scoring,
+        config.ipf_ms2_scoring,
+        config.ipf_max_precursor_pep,
+        config.ipf_max_precursor_peakgroup_pep,
+    )
+
     # get peptide ids
-    peptide_ids = reader.read(level="peptide_ids")["peptide_id"].unique()
+    peptidoform_group_mapping = reader.read(level="peptide_ids")
+
+    logger.info(
+        f"Processing {len(peptidoform_group_mapping)} peptidoform ids, and {len(peptidoform_group_mapping['isoform_id'].unique())} peptidoform groups."
+    )
+
+    peptidoform_group_ids = peptidoform_group_mapping["isoform_id"].unique()
 
     # Iterate over peptide_ids in batches to avoid memory issues
     if batch_size > 0:
-        peptide_id_batches = [
-            peptide_ids[i : i + batch_size]
-            for i in range(0, len(peptide_ids), batch_size)
+        peptidoform_group_id_batches = [
+            peptidoform_group_ids[i : i + batch_size]
+            for i in range(0, len(peptidoform_group_ids), batch_size)
         ]
     else:
-        peptide_id_batches = [peptide_ids]
+        peptidoform_group_id_batches = [peptidoform_group_ids]
 
     # Initialize an empty list to collect results
     all_peptidoform_data = []
-    for peptide_ids_batch in peptide_id_batches:
+    for group_idx, peptidoform_group_id_batches_batch in enumerate(
+        peptidoform_group_id_batches
+    ):
+        peptidoform_group_batch_mapping = peptidoform_group_mapping[
+            peptidoform_group_mapping["isoform_id"].isin(
+                peptidoform_group_id_batches_batch
+            )
+        ]
+
         logger.info(
-            f"Processing peptide IDs batch: {peptide_ids_batch[0]} to {peptide_ids_batch[-1]} of {len(peptide_ids)}..."
+            f"Processing batch {group_idx} of {len(peptidoform_group_id_batches)}: {len(peptidoform_group_batch_mapping)} peptidoforms with {len(peptidoform_group_batch_mapping['isoform_id'].unique())} unique peptidoform groups."
         )
 
-        # precursor level
-        precursor_table = reader.read(
-            level="peakgroup_precursor", peptide_ids=peptide_ids_batch
-        )
-        precursor_data = precursor_inference(
-            precursor_table,
-            config.ipf_ms1_scoring,
-            config.ipf_ms2_scoring,
-            config.ipf_max_precursor_pep,
-            config.ipf_max_precursor_peakgroup_pep,
-        )
+        peptide_ids_batch = peptidoform_group_batch_mapping["peptide_id"].unique()
 
         # peptidoform level
         peptidoform_table = reader.read(
@@ -530,7 +544,6 @@ def infer_peptidoforms(config: IPFIOConfig):
         )
 
         # finalize results and write to table
-        logger.info("Storing results.")
         peptidoform_data = peptidoform_data[peptidoform_data["hypothesis"] != -1][
             ["feature_id", "hypothesis", "precursor_peakgroup_pep", "qvalue", "pep"]
         ]
@@ -551,5 +564,12 @@ def infer_peptidoforms(config: IPFIOConfig):
     peptidoform_data = pd.concat(all_peptidoform_data, ignore_index=True)
 
     # Save results
+    logger.info("Storing results.")
+    num_unique_peptides = peptidoform_data[peptidoform_data["QVALUE"] <= 0.01][
+        ["FEATURE_ID", "PEPTIDE_ID"]
+    ].drop_duplicates()
+    logger.info(
+        f"Number of unique feature-peptidoform pairs at <= 1% QVALUE: {num_unique_peptides['FEATURE_ID'].nunique()} features, {num_unique_peptides['PEPTIDE_ID'].nunique()} peptides."
+    )
     writer = WriterDispatcher.get_writer(config)
     writer.save_results(result=peptidoform_data)

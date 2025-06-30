@@ -1,4 +1,5 @@
 import os
+import re
 import pickle
 from shutil import copyfile
 import sqlite3
@@ -90,7 +91,32 @@ class OSWReader(BaseOSWReader):
         """
         Fetch precursor to peptide mapping.
         """
+
         with sqlite3.connect(self.config.infile) as con:
+            query = """SELECT DISTINCT PEPTIDE_ID AS ID_codename, UNMODIFIED_SEQUENCE, MODIFIED_SEQUENCE
+            FROM SCORE_TRANSITION
+            INNER JOIN TRANSITION ON SCORE_TRANSITION.TRANSITION_ID = TRANSITION.ID
+            INNER JOIN TRANSITION_PEPTIDE_MAPPING ON TRANSITION.ID = TRANSITION_PEPTIDE_MAPPING.TRANSITION_ID
+            INNER JOIN PEPTIDE ON PEPTIDE.ID = TRANSITION_PEPTIDE_MAPPING.PEPTIDE_ID
+            WHERE TRANSITION.TYPE != ''
+            AND TRANSITION.DECOY = 0"""
+            peptidoform_df = pd.read_sql_query(query, con)
+
+            balanced = r"\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
+            peptidoform_df["mods_list"] = peptidoform_df["MODIFIED_SEQUENCE"].apply(
+                lambda s: re.findall(balanced, s)
+            )
+            peptidoform_df["bare_seq"] = peptidoform_df["MODIFIED_SEQUENCE"].apply(
+                lambda s: re.sub(balanced, "", s)
+            )
+            peptidoform_df["isoform_signature"] = peptidoform_df[
+                "bare_seq"
+            ] + peptidoform_df["mods_list"].apply(lambda L: "".join(sorted(L)))
+
+            peptidoform_df["isoform_id"] = peptidoform_df.groupby(
+                "isoform_signature"
+            ).ngroup()
+
             peptide_df = pd.read_sql_query(
                 "SELECT ID, MODIFIED_SEQUENCE FROM PEPTIDE", con
             )
@@ -128,6 +154,24 @@ class OSWReader(BaseOSWReader):
             on="ID_unimod",
             how="left",
         )
+
+        prec_peptide_mapping = pd.merge(
+            prec_peptide_mapping,
+            peptidoform_df[
+                [
+                    "ID_codename",
+                    "isoform_signature",
+                    "isoform_id",
+                ]
+            ],
+            left_on="ID_codename",
+            right_on="ID_codename",
+            how="outer",
+        )
+
+        # Drop NaN values in isoform_id
+        prec_peptide_mapping = prec_peptide_mapping.dropna(subset=["isoform_id"])
+
         return prec_peptide_mapping.rename(
             columns={
                 "ID_unimod": "peptide_id",
@@ -149,7 +193,7 @@ class OSWReader(BaseOSWReader):
             return self._fetch_alignment_features_duckdb(con)
         elif level == "peptide_ids":
             return (
-                self.prec_peptide_mapping[["ipf_peptide_id"]]
+                self.prec_peptide_mapping[["ipf_peptide_id", "isoform_id"]]
                 .rename(columns={"ipf_peptide_id": "peptide_id"})
                 .drop_duplicates()
                 .reset_index(drop=True)
