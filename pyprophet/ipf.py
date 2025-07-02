@@ -31,6 +31,13 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from scipy.stats import rankdata
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib import cm
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.interpolate import griddata
+from matplotlib.backends.backend_pdf import PdfPages
 
 from ._config import IPFIOConfig
 from .io.dispatcher import ReaderDispatcher, WriterDispatcher
@@ -449,6 +456,323 @@ def peptidoform_inference(
     return result
 
 
+def plot_precursor_inference(pdf_handle, precursor_table, precursor_data):
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    # Add supertitle for the entire figure
+    fig.suptitle("Precursor-Level Inference Plots", fontsize=16)
+
+    # Top-left: MS2 peak-group PEP histogram
+    ax = axs[0, 0]
+    ax.hist(precursor_table["ms2_peakgroup_pep"].dropna(), bins=50)
+    ax.set_title("MS2 Peak-Group PEP")
+    ax.set_xlabel("ms2_peakgroup_pep")
+    ax.set_ylabel("Count")
+
+    # Top-right: MS1 precursor PEP histogram or “No data”
+    ax = axs[0, 1]
+    vals = precursor_table["ms1_precursor_pep"].dropna()
+    if len(vals):
+        ax.hist(vals, bins=50)
+        ax.set_title("MS1 Precursor PEP")
+        ax.set_xlabel("ms1_precursor_pep")
+        ax.set_ylabel("Count")
+    else:
+        ax.text(
+            0.5, 0.5, "No ms1_precursor_pep data", ha="center", va="center", fontsize=12
+        )
+        ax.set_axis_off()
+
+    # Bottom-left: MS2 precursor PEP histogram or “No data”
+    ax = axs[1, 0]
+    vals2 = precursor_table["ms2_precursor_pep"].dropna()
+    if len(vals2):
+        ax.hist(vals2, bins=50)
+        ax.set_title("MS2 Precursor PEP")
+        ax.set_xlabel("ms2_precursor_pep")
+        ax.set_ylabel("Count")
+    else:
+        ax.text(
+            0.5, 0.5, "No ms2_precursor_pep data", ha="center", va="center", fontsize=12
+        )
+        ax.set_axis_off()
+
+    # merge precursor data with precursor_table
+    viz_df = precursor_table.merge(
+        precursor_data[["feature_id", "precursor_peakgroup_pep"]],
+        on=["feature_id"],
+        how="inner",
+    )
+
+    # Check if ms1_precursor_pep and ms2_peakgroup_pep are not all NaN
+    if (
+        viz_df["ms1_precursor_pep"].isna().all()
+        or viz_df["ms2_peakgroup_pep"].isna().all()
+    ):
+        ax = axs[1, 1]
+        ax.text(
+            0.5,
+            0.5,
+            "No data for ms1_precursor_pep or ms2_peakgroup_pep",
+            ha="center",
+            va="center",
+            fontsize=12,
+        )
+        ax.set_axis_off()
+    else:
+        # Bottom-right: 2D scatter colored by posterior
+        ax = axs[1, 1]
+        sc = ax.scatter(
+            viz_df.ms2_peakgroup_pep,
+            viz_df.ms1_precursor_pep,
+            s=20,
+            c=1 - viz_df.precursor_peakgroup_pep,
+            cmap="viridis",
+            alpha=0.7,
+        )
+        ax.set_title("Posterior vs. MS2 & MS1 PEP")
+        ax.set_xlabel("ms2_peakgroup_pep")
+        ax.set_ylabel("ms1_precursor_pep")
+        fig.colorbar(sc, ax=ax, label="posterior")
+
+    fig.tight_layout()
+    pdf_handle.savefig(fig)
+    plt.close(fig)
+
+
+def plot_peptidoform_inference(
+    pdf_handle, peptidoform_table, peptidoform_data, precursor_data=None
+):
+    """
+    Generate an 4x2 subplot figure for peptidoform-level inference and save to pdf_handle.
+
+    Parameters:
+    - pdf_handle: PdfPages object open for saving figures.
+    - peptidoform_table: DataFrame before inference (cols: feature_id, transition_id, pep, peptide_id, bmask, num_peptidoforms).
+    - peptidoform_data: DataFrame after inference (cols: feature_id, hypothesis, likelihood_prior, likelihood_sum, posterior, pep, qvalue, precursor_peakgroup_pep).
+    - precursor_data: (optional) DataFrame with cols feature_id, precursor_peakgroup_pep.
+    """
+    # Create a 4x2 grid: total 8 plots
+    fig = plt.figure(figsize=(16, 20))
+    fig.suptitle("Peptidoform-Level Inference Summary", fontsize=18)
+
+    # 1) Raw transition-level PEP histogram
+    logger.debug("Plotting raw transition-level PEP histogram ...")
+    ax1 = fig.add_subplot(4, 2, 1)
+    ax1.hist(peptidoform_table["pep"].dropna(), bins=50)
+    ax1.set_title("Raw transition-level PEPs")
+    ax1.set_xlabel("pep")
+    ax1.set_ylabel("Count")
+
+    # 2) Posterior probability histogram
+    logger.debug("Plotting posterior probability distribution ...")
+    ax2 = fig.add_subplot(4, 2, 2)
+    ax2.hist(peptidoform_data["posterior"].dropna(), bins=50)
+    ax2.set_title("Posterior probability distribution")
+    ax2.set_xlabel("posterior")
+    ax2.set_ylabel("Count")
+
+    # 3) 2D histogram of posterior vs. group size
+    logger.debug("Plotting 2D histogram of posterior vs. group size …")
+    # Merge to get num_peptidoforms
+    df_merge = peptidoform_data.merge(
+        peptidoform_table[["feature_id", "num_peptidoforms"]].drop_duplicates(),
+        on="feature_id",
+        how="inner",
+    )
+    ax3 = fig.add_subplot(4, 2, 3)
+
+    # Use 40 bins in X, 3 bins in Y for the discrete posterior levels, linear color scale
+    h = ax3.hist2d(
+        df_merge["num_peptidoforms"],
+        df_merge["posterior"],
+        bins=[40, 3],
+        cmap="plasma",  # high‐contrast perceptual map
+    )
+
+    # no log‐scaling on the X axis
+    ax3.set_title("2D histogram: posterior vs. group size")
+    ax3.set_xlabel("num_peptidoforms")
+    ax3.set_ylabel("posterior")
+
+    # colorbar for the histogram (linear counts)
+    cbar = fig.colorbar(h[3], ax=ax3, label="counts")
+
+    # 4) 3D surface: prior vs evidence vs posterior
+    logger.debug("Plotting 3D surface of prior vs evidence vs posterior ...")
+    # Recompute prior & evidence
+    df_pep = peptidoform_table.copy()
+    df_pep["prior"] = np.where(
+        df_pep["peptide_id"] != -1, 1.0 / df_pep["num_peptidoforms"], df_pep["pep"]
+    )
+    df_pep["evidence"] = np.where(
+        df_pep["bmask"] == 1, 1 - df_pep["pep"], df_pep["pep"]
+    )
+    merged_surface = pd.merge(
+        df_pep,
+        peptidoform_data[["feature_id", "hypothesis", "posterior"]],
+        left_on=["feature_id", "peptide_id"],
+        right_on=["feature_id", "hypothesis"],
+    )
+    priors = merged_surface["prior"]
+    evidences = merged_surface["evidence"]
+    posteriors = merged_surface["posterior"]
+    xi = np.linspace(priors.min(), priors.max(), 30)
+    yi = np.linspace(evidences.min(), evidences.max(), 30)
+    xi, yi = np.meshgrid(xi, yi)
+    zi = griddata((priors, evidences), posteriors, (xi, yi), method="linear")
+    ax4 = fig.add_subplot(4, 2, 4, projection="3d")
+    ax4.plot_surface(xi, yi, zi, rcount=20, ccount=20, alpha=0.8)
+    ax4.set_title("Posterior surface")
+    ax4.set_xlabel("prior")
+    ax4.set_ylabel("evidence")
+    ax4.set_zlabel("posterior")
+
+    # 5) Scatter: transition PEP vs precursor confidence
+    logger.debug("Plotting 2D contour of posterior surface ...")
+    ax5 = fig.add_subplot(4, 2, 5)
+    cf = ax5.contourf(
+        xi, yi, zi, levels=50, cmap="viridis", norm=mcolors.Normalize(vmin=0, vmax=1)
+    )
+    ax5.set_title("Posterior surface (2D contour)")
+    ax5.set_xlabel("prior")
+    ax5.set_ylabel("evidence")
+    cbar = fig.colorbar(cf, ax=ax5, label="posterior")
+
+    # 6) 2D histogram: pep vs precursor confidence
+    logger.debug("Plotting 2D histogram of transition pep vs precursor confidence ...")
+    ax6 = fig.add_subplot(4, 2, 6)
+    if precursor_data is not None:
+        trans = peptidoform_table[["feature_id", "pep"]].drop_duplicates()
+        merged2 = pd.merge(
+            trans,
+            precursor_data[["feature_id", "precursor_peakgroup_pep"]],
+            on="feature_id",
+            how="inner",
+        )
+        merged2 = pd.merge(
+            merged2,
+            peptidoform_data[["feature_id", "posterior"]],
+            on="feature_id",
+            how="inner",
+        )
+
+        ax6.hist2d(merged2["pep"], merged2["precursor_peakgroup_pep"], bins=50)
+        ax6.set_title("2D hist: pep vs. precursor confidence")
+        ax6.set_xlabel("transition pep")
+        ax6.set_ylabel("precursor_peakgroup_pep")
+    else:
+        ax6.text(0.5, 0.5, "No precursor_data for hist2d", ha="center", va="center")
+        ax6.set_axis_off()
+
+    # 7) Cumulative q-value curves
+    logger.debug("Plotting cumulative q-value curves (-log10) by group size …")
+    ax7 = fig.add_subplot(4, 2, 7)
+
+    # prepare colormap
+    group_sizes = sorted(df_merge["num_peptidoforms"].unique())
+    norm = mpl.colors.Normalize(vmin=min(group_sizes), vmax=max(group_sizes))
+    cmap = mpl.cm.get_cmap("viridis")
+
+    # threshold in –log10 units
+    thresh_q = 0.01
+    thresh_y = -np.log10(thresh_q)
+
+    # compute a floor for zero q-values
+    all_q = df_merge["qvalue"]
+    # use the smallest non-zero qvalue, or 1e-16 if none
+    min_nonzero = all_q[all_q > 0].min() if (all_q > 0).any() else 1e-16
+    eps = min_nonzero / 10.0
+
+    for k, grp in df_merge.groupby("num_peptidoforms"):
+        q_sorted = np.sort(grp["qvalue"])
+        # clip zeros up to eps to avoid -log10(0)
+        q_clipped = np.clip(q_sorted, a_min=eps, a_max=None)
+        y_vals = -np.log10(q_clipped)
+        x_vals = np.arange(1, len(y_vals) + 1)
+        ax7.plot(
+            x_vals,
+            y_vals,
+            color=cmap(norm(k)),
+            linewidth=1,
+            alpha=0.8,
+        )
+
+    # dashed line at 1% Q (–log10 = 2)
+    ax7.axhline(thresh_y, color="red", linestyle="--", linewidth=1)
+    ax7.text(
+        0.98,
+        thresh_y + 0.05,
+        "1% Q (\u2013log10=2)",
+        color="red",
+        ha="right",
+        va="bottom",
+        transform=ax7.get_yaxis_transform(),
+    )
+
+    # annotate total count below threshold (across *all* groups)
+    total_below = (df_merge["qvalue"] <= thresh_q).sum()
+    ax7.text(
+        0.98,
+        0.95,
+        f"Total ≤1% Q: {total_below}",
+        transform=ax7.transAxes,
+        ha="right",
+        va="top",
+        fontsize=10,
+        color="black",
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.7),
+    )
+
+    ax7.set_title("Cumulative –log10(qvalue) by group size")
+    ax7.set_xlabel("Rank")
+    ax7.set_ylabel("-log10(qvalue)")
+
+    # colorbar
+    sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax7, pad=0.01)
+    cbar.set_label("num_peptidoforms")
+
+    # 8) Heatmap: feature × hypothesis posterior, with percentile‐based scaling
+    logger.debug("Plotting feature × hypothesis posterior heatmap …")
+    ax8 = fig.add_subplot(4, 2, 8)
+
+    # pivot into matrix
+    pivot = (
+        df_merge[df_merge["hypothesis"] != -1]
+        .pivot(index="feature_id", columns="hypothesis", values="posterior")
+        .fillna(0)
+    )
+
+    # find a high percentile of the nonzero values to saturate at (e.g. 95th percentile)
+    nonzero = pivot.values[pivot.values > 0]
+    if len(nonzero):
+        vmax = np.percentile(nonzero, 95)
+    else:
+        vmax = 1.0
+
+    # plot with a high‐contrast colormap and clipped vmax
+    cax = ax8.imshow(
+        pivot.values,
+        aspect="auto",
+        interpolation="nearest",
+        cmap="magma",
+        vmin=0,
+        vmax=vmax,
+    )
+
+    ax8.set_title("Feature × Peptidoform posterior heatmap")
+    ax8.set_xlabel("hypothesis")
+    ax8.set_ylabel("feature index")
+
+    # add colorbar, note it shows 0 → vmax
+    cbar = fig.colorbar(cax, ax=ax8, label="posterior (0–95th pct)")
+
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    pdf_handle.savefig(fig)
+    plt.close(fig)
+
+
 def infer_peptidoforms(config: IPFIOConfig):
     """
     Orchestrates the Inference of PeptidoForms (IPF) workflow.
@@ -464,6 +788,7 @@ def infer_peptidoforms(config: IPFIOConfig):
     batch_size = config.batch_size
 
     reader = ReaderDispatcher.get_reader(config)
+    pdf_handle = PdfPages(f"{config.prefix}_ipf_report.pdf")
 
     # precursor level
     precursor_table = reader.read(level="peakgroup_precursor", peptide_ids=None)
@@ -474,6 +799,7 @@ def infer_peptidoforms(config: IPFIOConfig):
         config.ipf_max_precursor_pep,
         config.ipf_max_precursor_peakgroup_pep,
     )
+    plot_precursor_inference(pdf_handle, precursor_table, precursor_data)
 
     # get peptide ids
     peptidoform_group_mapping = reader.read(level="peptide_ids")
@@ -505,7 +831,7 @@ def infer_peptidoforms(config: IPFIOConfig):
         ]
 
         logger.info(
-            f"Processing batch {group_idx} of {len(peptidoform_group_id_batches)}: {len(peptidoform_group_batch_mapping)} peptidoforms with {len(peptidoform_group_batch_mapping['isoform_id'].unique())} unique peptidoform groups."
+            f"Processing batch {group_idx + 1} of {len(peptidoform_group_id_batches)}: {len(peptidoform_group_batch_mapping)} peptidoforms with {len(peptidoform_group_batch_mapping['isoform_id'].unique())} unique peptidoform groups."
         )
 
         peptide_ids_batch = peptidoform_group_batch_mapping["peptide_id"].unique()
@@ -543,6 +869,13 @@ def infer_peptidoforms(config: IPFIOConfig):
             config.across_run_confidence_threshold,
         )
 
+        plot_peptidoform_inference(
+            pdf_handle,
+            peptidoform_table,
+            peptidoform_data,
+            precursor_data=precursor_data,
+        )
+
         # finalize results and write to table
         peptidoform_data = peptidoform_data[peptidoform_data["hypothesis"] != -1][
             ["feature_id", "hypothesis", "precursor_peakgroup_pep", "qvalue", "pep"]
@@ -571,5 +904,6 @@ def infer_peptidoforms(config: IPFIOConfig):
     logger.info(
         f"Number of unique feature-peptidoform pairs at <= 1% QVALUE: {num_unique_peptides['FEATURE_ID'].nunique()} features, {num_unique_peptides['PEPTIDE_ID'].nunique()} peptides."
     )
+    pdf_handle.close()
     writer = WriterDispatcher.get_writer(config)
     writer.save_results(result=peptidoform_data)
