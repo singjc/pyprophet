@@ -613,6 +613,7 @@ def plot_peptidoform_inference(
         left_on=["feature_id", "peptide_id"],
         right_on=["feature_id", "hypothesis"],
     )
+    merged_surface = merged_surface.dropna(subset=["prior", "evidence", "posterior"])
     priors = merged_surface["prior"]
     evidences = merged_surface["evidence"]
     posteriors = merged_surface["posterior"]
