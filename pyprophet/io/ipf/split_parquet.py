@@ -246,7 +246,7 @@ class SplitParquetReader(BaseSplitParquetReader):
         """
 
         con.execute(f"""
-        PRAGMA threads=8;  -- enable multicore parquet scans
+        PRAGMA threads={os.cpu_count() - 1};  -- enable multicore parquet scans
 
         CREATE OR REPLACE VIEW transitions AS
         SELECT
