@@ -220,194 +220,148 @@ class SplitParquetReader(BaseSplitParquetReader):
         else:
             peptide_ids_filter_query = ""
 
-        # # Load all transition files into DuckDB view
-        # con.execute(
-        #     f"CREATE VIEW transitions AS SELECT * FROM read_parquet({transition_files})"
-        # )
-
-        # # Evidence table: transition-level PEPs
-        # query = f"""
-        # SELECT t.FEATURE_ID, t.TRANSITION_ID, t.SCORE_TRANSITION_PEP AS PEP
-        # FROM transition t
-        # WHERE t.TRANSITION_TYPE != ''
-        # AND t.TRANSITION_DECOY = 0
-        # AND t.SCORE_TRANSITION_SCORE IS NOT NULL
-        # AND t.SCORE_TRANSITION_PEP < {pep_threshold}
-        # """
-        # evidence = con.execute(query).df().rename(columns=str.lower)
-        # logger.debug(f"Loaded {len(evidence)} transition evidence entries, using: {evidence.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
-
-        # # Bitmask table: transition-peptidoform presence
-        # query = """
-        # SELECT DISTINCT t.TRANSITION_ID, t.IPF_PEPTIDE_ID AS PEPTIDE_ID, 1 AS BMASK
-        # FROM transition t
-        # WHERE t.TRANSITION_TYPE != ''
-        # AND t.TRANSITION_DECOY = 0
-        # AND t.SCORE_TRANSITION_SCORE IS NOT NULL
-        # AND t.IPF_PEPTIDE_ID IS NOT NULL
-        # """
-        # bitmask = con.execute(query).df().rename(columns=str.lower)
-        # logger.debug(
-        #     f"Loaded {len(bitmask)} transition-peptidoform bitmask entries, using: {bitmask.memory_usage(deep=True).sum() / 1024**2:.2f} MB"
-        # )
-
-        # # Peptidoform count per feature
-        # query = """
-        # SELECT t.FEATURE_ID, COUNT(DISTINCT t.IPF_PEPTIDE_ID) AS NUM_PEPTIDOFORMS
-        # FROM transition t
-        # WHERE t.TRANSITION_TYPE != ''
-        # AND t.TRANSITION_DECOY = 0
-        # AND t.SCORE_TRANSITION_SCORE IS NOT NULL
-        # AND t.IPF_PEPTIDE_ID IS NOT NULL
-        # GROUP BY t.FEATURE_ID
-        # ORDER BY t.FEATURE_ID
-        # """
-        # num_peptidoforms = con.execute(query).df().rename(columns=str.lower)
-        # logger.debug(
-        #     f"Loaded {len(num_peptidoforms)} feature-peptidoform count entries, using: {num_peptidoforms.memory_usage(deep=True).sum() / 1024**2:.2f} MB"
-        # )
-
-        # # Peptidoform mapping: (feature_id, peptide_id)
-        # query = """
-        # SELECT DISTINCT t.FEATURE_ID, t.IPF_PEPTIDE_ID AS PEPTIDE_ID
-        # FROM transition t
-        # WHERE t.TRANSITION_TYPE != ''
-        # AND t.TRANSITION_DECOY = 0
-        # AND t.SCORE_TRANSITION_SCORE IS NOT NULL
-        # AND t.IPF_PEPTIDE_ID IS NOT NULL
-        # ORDER BY t.FEATURE_ID
-        # """
-        # peptidoforms = con.execute(query).df().rename(columns=str.lower)
-        # logger.debug(
-        #     f"Loaded {len(peptidoforms)} peptidoform entries, using: {peptidoforms.memory_usage(deep=True).sum() / 1024**2:.2f} MB"
-        # )
-
-        # # Add h0 (decoy) peptide_id = -1 if enabled
-        # if ipf_h0:
-        #     h0_df = pd.DataFrame(
-        #         {"feature_id": peptidoforms["feature_id"].unique(), "peptide_id": -1}
-        #     )
-        #     peptidoforms = pd.concat([peptidoforms, h0_df], ignore_index=True)
-        #     logger.debug(
-        #         f"Added {len(h0_df)} decoy peptidoform entries with peptide_id = -1"
-        #     )
-
-        # # Merge all parts into final dataframe
-        # trans_pf = pd.merge(evidence, peptidoforms, how="outer", on="feature_id")
-        # trans_pf_bm = pd.merge(
-        #     trans_pf, bitmask, how="left", on=["transition_id", "peptide_id"]
-        # ).fillna(0)
-        # result = pd.merge(trans_pf_bm, num_peptidoforms, how="inner", on="feature_id")
-        # logger.debug(
-        #     f"Final merged transition-peptidoform entries: {len(result)}, using: {result.memory_usage(deep=True).sum() / 1024**2:.2f} MB"
-        # )
-
-        # result = result.drop_duplicates()
-
-        # logger.info(f"Loaded {len(result)} transition-peptidoform entries")
-
         # --------------------------------------------------------------------------
         # Step 1: Create or refresh DuckDB view for all transition features
         # --------------------------------------------------------------------------
-        con.execute(
-            f"""
-            CREATE OR REPLACE VIEW transitions AS
-            SELECT
+        # con.execute(
+        #     f"""
+        #     CREATE OR REPLACE VIEW transitions AS
+        #     SELECT
+        #     FEATURE_ID,
+        #     TRANSITION_ID,
+        #     IPF_PEPTIDE_ID AS peptide_id,
+        #     SCORE_TRANSITION_PEP  AS pep,
+        #     SCORE_TRANSITION_SCORE,
+        #     TRANSITION_TYPE,
+        #     TRANSITION_DECOY
+        #     FROM read_parquet({transition_files})
+        #     """
+        # )
+        filter_where = f"""
+        WHERE TRANSITION_TYPE       != ''
+            AND TRANSITION_DECOY       = 0
+            AND SCORE_TRANSITION_SCORE IS NOT NULL
+            AND SCORE_TRANSITION_PEP   < {pep_threshold}
+            {peptide_ids_filter_query}
+        """
+
+        con.execute(f"""
+        PRAGMA threads=8;  -- enable multicore parquet scans
+
+        CREATE OR REPLACE VIEW transitions AS
+        SELECT
             FEATURE_ID,
             TRANSITION_ID,
-            IPF_PEPTIDE_ID AS peptide_id,
-            SCORE_TRANSITION_PEP  AS pep,
-            SCORE_TRANSITION_SCORE,
-            TRANSITION_TYPE,
-            TRANSITION_DECOY
-            FROM read_parquet({transition_files})
-            """
+            IPF_PEPTIDE_ID    AS peptide_id,
+            SCORE_TRANSITION_PEP   AS pep
+        FROM read_parquet(
+            {transition_files},
+            columns=>[
+            'FEATURE_ID','TRANSITION_ID',
+            'IPF_PEPTIDE_ID','SCORE_TRANSITION_PEP',
+            'TRANSITION_TYPE','TRANSITION_DECOY','SCORE_TRANSITION_SCORE'
+            ]
         )
+        {filter_where};
+        """)
 
         # --------------------------------------------------------------------------
         # Step 2: Single SQL query with CTEs to build evidence, peptidoforms, bitmask, and counts
         # --------------------------------------------------------------------------
-        # # Fetch all distinct non-null feature_ids
-        # rows = con.execute(
-        #     "SELECT DISTINCT feature_id FROM transitions WHERE feature_id IS NOT NULL"
-        # ).fetchall()
-        # fids = [r[0] for r in rows]
-        # if not fids:
-        #     logger.info("No features to process.")
-        #     return pd.DataFrame(
-        #         columns=[
-        #             "feature_id",
-        #             "transition_id",
-        #             "pep",
-        #             "peptide_id",
-        #             "bmask",
-        #             "num_peptidoforms",
-        #         ]
-        #     )
 
-        # Prepare optional decoy union for peptidoforms
-        union_sql = (
-            "UNION ALL SELECT feature_id, -1 AS peptide_id FROM peptidoforms_real"
-            if ipf_h0
-            else ""
-        )
+        # # Prepare optional decoy union for peptidoforms
+        # union_sql = (
+        #     "UNION ALL SELECT feature_id, -1 AS peptide_id FROM peptidoforms_real"
+        #     if ipf_h0
+        #     else ""
+        # )
 
-        # merged_chunks = []
+        # sql = f"""
+        # WITH
+        # -- evidence: transitions passing pep threshold
+        # evidence AS (
+        #     SELECT feature_id, transition_id, pep
+        #     FROM transitions
+        #     WHERE TRANSITION_TYPE       != ''
+        #     AND TRANSITION_DECOY       = 0
+        #     AND SCORE_TRANSITION_SCORE IS NOT NULL
+        #     AND pep < {pep_threshold}
+        # ),
 
-        # # Process in batches of feature_ids
-        # for i in range(0, len(fids), chunk_size):
-        #     batch = fids[i : i + chunk_size]
-        #     fid_list = ",".join(str(x) for x in batch)
+        # -- real peptidoforms: all peptide_ids per feature
+        # peptidoforms_real AS (
+        #     SELECT DISTINCT feature_id, peptide_id
+        #     FROM transitions
+        #     WHERE TRANSITION_TYPE       != ''
+        #     AND TRANSITION_DECOY       = 0
+        #     AND SCORE_TRANSITION_SCORE IS NOT NULL
+        #     AND peptide_id IS NOT NULL
+        #     {peptide_ids_filter_query}
+        # ),
 
-        #     logger.debug(
-        #         f"Processing features {i}-{i + len(batch)}: {len(batch)} features"
-        #     )
+        # -- include optional decoys
+        # peptidoforms AS (
+        #     SELECT * FROM peptidoforms_real
+        #     {union_sql}
+        # ),
 
+        # -- bitmask: observed transition-peptidoform pairs
+        # bitmask AS (
+        #     SELECT DISTINCT t.transition_id, t.peptide_id, 1 AS bmask
+        #     FROM transitions t
+        #     WHERE t.TRANSITION_TYPE       != ''
+        #     AND t.TRANSITION_DECOY       = 0
+        #     AND t.SCORE_TRANSITION_SCORE IS NOT NULL
+        #     AND t.peptide_id IS NOT NULL
+        #     {peptide_ids_filter_query}
+        # ),
+
+        # -- counts: number of real peptidoforms per feature
+        # counts AS (
+        #     SELECT feature_id, COUNT(DISTINCT peptide_id) AS num_peptidoforms
+        #     FROM peptidoforms_real
+        #     {peptide_ids_filter_query.replace("AND", "WHERE", 1)}
+        #     GROUP BY feature_id
+        # )
+
+        # SELECT
+        # COALESCE(e.feature_id, p.feature_id) AS feature_id,
+        # e.transition_id,
+        # e.pep,
+        # p.peptide_id,
+        # COALESCE(b.bmask, 0)      AS bmask,
+        # c.num_peptidoforms       AS num_peptidoforms
+        # FROM evidence e
+        # FULL OUTER JOIN peptidoforms p
+        # ON e.feature_id = p.feature_id
+        # LEFT JOIN bitmask b
+        # ON e.transition_id = b.transition_id
+        # AND p.peptide_id   = b.peptide_id
+        # JOIN counts c
+        # ON COALESCE(e.feature_id, p.feature_id) = c.feature_id
+        # """
         sql = f"""
         WITH
-        -- evidence: transitions passing pep threshold
-        evidence AS (
-            SELECT feature_id, transition_id, pep
-            FROM transitions
-            WHERE TRANSITION_TYPE       != ''
-            AND TRANSITION_DECOY       = 0
-            AND SCORE_TRANSITION_SCORE IS NOT NULL
-            AND pep < {pep_threshold}
-        ),
-
-        -- real peptidoforms: all peptide_ids per feature
         peptidoforms_real AS (
             SELECT DISTINCT feature_id, peptide_id
             FROM transitions
-            WHERE TRANSITION_TYPE       != ''
-            AND TRANSITION_DECOY       = 0
-            AND SCORE_TRANSITION_SCORE IS NOT NULL
-            AND peptide_id IS NOT NULL
-            {peptide_ids_filter_query}
+            WHERE peptide_id IS NOT NULL
         ),
 
-        -- include optional decoys
         peptidoforms AS (
             SELECT * FROM peptidoforms_real
-            {union_sql}
+            {"UNION ALL SELECT feature_id, -1 AS peptide_id FROM peptidoforms_real" if ipf_h0 else ""}
         ),
 
-        -- bitmask: observed transition-peptidoform pairs
         bitmask AS (
-            SELECT DISTINCT t.transition_id, t.peptide_id, 1 AS bmask
-            FROM transitions t
-            WHERE t.TRANSITION_TYPE       != ''
-            AND t.TRANSITION_DECOY       = 0
-            AND t.SCORE_TRANSITION_SCORE IS NOT NULL
-            AND t.peptide_id IS NOT NULL
-            {peptide_ids_filter_query}
+            SELECT transition_id, peptide_id, 1 AS bmask
+            FROM transitions
+            WHERE peptide_id IS NOT NULL
         ),
 
-        -- counts: number of real peptidoforms per feature
         counts AS (
-            SELECT feature_id, COUNT(DISTINCT peptide_id) AS num_peptidoforms
+            SELECT feature_id, COUNT(*) AS num_peptidoforms
             FROM peptidoforms_real
-            {peptide_ids_filter_query.replace("AND", "WHERE", 1)}
             GROUP BY feature_id
         )
 
@@ -416,25 +370,20 @@ class SplitParquetReader(BaseSplitParquetReader):
         e.transition_id,
         e.pep,
         p.peptide_id,
-        COALESCE(b.bmask, 0)      AS bmask,
-        c.num_peptidoforms       AS num_peptidoforms
-        FROM evidence e
-        FULL OUTER JOIN peptidoforms p
-        ON e.feature_id = p.feature_id
-        LEFT JOIN bitmask b
+        COALESCE(b.bmask, 0)    AS bmask,
+        c.num_peptidoforms     AS num_peptidoforms
+        FROM
+        -- evidence is now just the view itself
+        transitions AS e
+        FULL OUTER JOIN peptidoforms AS p USING (feature_id)
+        LEFT JOIN bitmask AS b
         ON e.transition_id = b.transition_id
         AND p.peptide_id   = b.peptide_id
-        JOIN counts c
-        ON COALESCE(e.feature_id, p.feature_id) = c.feature_id
+        JOIN counts AS c USING (feature_id);
         """
 
         result = con.execute(sql).df().rename(columns=str.lower)
 
-        # df_chunk = con.execute(sql).df().rename(columns=str.lower)
-        # merged_chunks.append(df_chunk)
-
-        # Concatenate all batches, dedupe, and return
-        # result = pd.concat(merged_chunks, ignore_index=True)
         result = result.drop_duplicates()
         logger.info(f"Loaded total {len(result)} transition-peptidoform entries")
 
