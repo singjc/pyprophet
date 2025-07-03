@@ -254,14 +254,7 @@ class SplitParquetReader(BaseSplitParquetReader):
             TRANSITION_ID,
             IPF_PEPTIDE_ID    AS peptide_id,
             SCORE_TRANSITION_PEP   AS pep
-        FROM read_parquet(
-            {transition_files},
-            columns=>[
-            'FEATURE_ID','TRANSITION_ID',
-            'IPF_PEPTIDE_ID','SCORE_TRANSITION_PEP',
-            'TRANSITION_TYPE','TRANSITION_DECOY','SCORE_TRANSITION_SCORE'
-            ]
-        )
+        FROM read_parquet({transition_files})
         {filter_where};
         """)
 
