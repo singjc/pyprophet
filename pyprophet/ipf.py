@@ -951,8 +951,13 @@ def pre_propagate_evidence(config: IPFIOConfig):
 
     # 2) build feature → run lookup
     if re_create_tables:
-        precursor_files = glob.glob("oswpq/*.oswpq/precursors_features.parquet")
-        transition_files = glob.glob("oswpq/*.oswpq/transition_features.parquet")
+        # TODO: Make this more robust for different file formats.
+        precursor_files = glob.glob(
+            f"{config.infile}/*.oswpq/precursors_features.parquet"
+        )
+        transition_files = glob.glob(
+            f"{config.infile}/*.oswpq/transition_features.parquet"
+        )
         con.execute(f"""
         CREATE TABLE IF NOT EXISTS feature_run_map AS
         SELECT DISTINCT
