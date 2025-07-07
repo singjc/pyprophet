@@ -27,6 +27,7 @@ Classes:
     None
 """
 
+import math
 import os
 import glob
 from itertools import islice
@@ -999,14 +1000,14 @@ def pre_propagate_evidence(config: IPFIOConfig):
         ;
         """)
 
-    # ── helper to chunk an iterable ────────────────────────────────
-    def chunked(iterable, size):
-        it = iter(iterable)
-        while True:
-            batch = list(islice(it, size))
-            if not batch:
-                return
-            yield batch
+    # # ── helper to chunk an iterable ────────────────────────────────
+    # def chunked(iterable, size):
+    #     it = iter(iterable)
+    #     while True:
+    #         batch = list(islice(it, size))
+    #         if not batch:
+    #             return
+    #         yield batch
 
     # 5.1) make sure we have a table to remember which groups ran
     con.execute("""
@@ -1015,86 +1016,113 @@ def pre_propagate_evidence(config: IPFIOConfig):
     )
     """)
 
+    con.execute("""
+    CREATE INDEX IF NOT EXISTS idx_mt_group
+        ON merged_transitions(alignment_group_id);
+    """)
+    con.execute("""
+    CREATE INDEX IF NOT EXISTS idx_pg_id
+        ON processed_groups(id);
+    """)
+
     # 5) chunk *by* alignment_group_id so you never split a group
     # -------------------------------------------------------------
 
+    total_groups = con.execute("""
+    SELECT COUNT(DISTINCT alignment_group_id)
+    FROM merged_transitions
+    WHERE feature_id != alignment_group_id
+        AND alignment_group_id NOT IN (SELECT id FROM processed_groups)
+    """).fetchone()[0]
+
+    total_batches = math.ceil(total_groups / chunk_size)
+    processed = 0
+    batch_idx = 0
+
     while True:
-        # 5a) grab all IDs needing propagation
-        # fetch only *unprocessed* alignment_group_ids
-        group_ids = [
-            r[0]
-            for r in con.execute("""
-            SELECT DISTINCT alignment_group_id
-            FROM merged_transitions
-            WHERE feature_id != alignment_group_id
+        # 1) grab the next batch of group IDs
+        rows = con.execute(f"""
+        SELECT DISTINCT alignment_group_id
+        FROM merged_transitions
+        WHERE feature_id != alignment_group_id
             AND alignment_group_id NOT IN (SELECT id FROM processed_groups)
+        LIMIT {chunk_size}
         """).fetchall()
-        ]
-        if not group_ids:
-            print("✅ all done!")
+
+        batch = [r[0] for r in rows]
+        if not batch:
+            logger.info("✅ all done!")
             break
-        print(
-            f"Found {len(group_ids)} alignment groups needing propagation.", flush=True
+
+        batch_idx += 1
+        processed += len(batch)
+        remaining = total_groups - processed
+
+        logger.info(
+            f"[{batch_idx}/{total_batches}] "
+            f"Propagating {len(batch)} groups "
+            f"(processed {processed}/{total_groups}, {remaining} remaining)…"
         )
-        # 5b) process in batches of, say, 500 groups at a time
-        for i, batch in enumerate(chunked(group_ids, chunk_size), start=1):
-            print(
-                f"[{i} of {len(group_ids) // chunk_size + 1}] propagating {len(batch)} groups…",
-                flush=True,
-            )
-            ids = ",".join(map(str, batch))
-            # pull *all* rows for these groups in one go
-            df_chunk = con.execute(f"""
-                SELECT *
+        ids = ",".join(map(str, batch))
+
+        # 2) pull only the columns you need
+        df_chunk = con.execute(f"""
+            SELECT run_id,
+                    feature_id,
+                    transition_id,
+                    peptide_id,
+                    alignment_group_id,
+                    pep
                 FROM merged_transitions
                 WHERE alignment_group_id IN ({ids})
                 AND feature_id != alignment_group_id
             """).df()
-            # apply your Python propagation
-            df_prop = transfer_confident_evidence_across_runs(
-                df_chunk,
-                across_run_confidence_threshold,
-                group_cols=[
-                    "run_id",
-                    "feature_id",
-                    "transition_id",
-                    "peptide_id",
-                    "alignment_group_id",
-                ],
-                value_cols=["pep"],
-            )
-            # write them back, then free memory immediately
-            con.register("tmp", df_prop)
-            # start a manual transaction
-            con.execute("BEGIN TRANSACTION;")
-            try:
-                # your delete + insert here
-                con.execute("""
-                DELETE FROM merged_transitions
-                USING tmp
-                WHERE merged_transitions.run_id             = tmp.run_id
-                    AND merged_transitions.feature_id         = tmp.feature_id
-                    AND merged_transitions.transition_id      = tmp.transition_id
-                    AND merged_transitions.alignment_group_id = tmp.alignment_group_id
-                """)
-                con.execute("""
-                INSERT INTO merged_transitions
-                SELECT * FROM tmp
-                """)
-                # now mark these groups as done
-                # we can bulk-insert them
-                values = ",".join(f"({g})" for g in batch)
-                con.execute(f"""
-                INSERT INTO processed_groups(id)
-                VALUES {values}
-                ON CONFLICT DO NOTHING   -- ignore duplicates
-                """)
-            except Exception:
-                # undo everything in this transaction
-                con.execute("ROLLBACK;")
-                raise
-            else:
-                # make it permanent
-                con.execute("COMMIT;")
+
+        # 3) do your Python propagation
+        df_prop = transfer_confident_evidence_across_runs(
+            df_chunk,
+            across_run_confidence_threshold,
+            group_cols=[
+                "run_id",
+                "feature_id",
+                "transition_id",
+                "peptide_id",
+                "alignment_group_id",
+            ],
+            value_cols=["pep"],
+        )
+
+        # 4) write back inside a manual transaction
+        con.register("tmp", df_prop)
+        con.execute("BEGIN TRANSACTION;")
+        try:
+            # replace rows
+            con.execute("""
+            DELETE FROM merged_transitions
+            USING tmp
+            WHERE merged_transitions.run_id             = tmp.run_id
+            AND merged_transitions.feature_id         = tmp.feature_id
+            AND merged_transitions.transition_id      = tmp.transition_id
+            AND merged_transitions.alignment_group_id = tmp.alignment_group_id
+            """)
+            con.execute("""
+            INSERT INTO merged_transitions
+            SELECT * FROM tmp
+            """)
+            # mark these groups as done
+            vals = ",".join(f"({g})" for g in batch)
+            con.execute(f"""
+            INSERT INTO processed_groups(id)
+            VALUES {vals}
+            ON CONFLICT DO NOTHING
+            """)
+        except Exception:
+            con.execute("ROLLBACK;")
+            raise
+        else:
+            con.execute("COMMIT;")
+        finally:
             con.unregister("tmp")
-            del df_chunk, df_prop
+
+        # 5) free Python memory
+        del df_chunk, df_prop
