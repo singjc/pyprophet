@@ -1016,6 +1016,8 @@ def pre_propagate_evidence(config: IPFIOConfig):
     )
     """)
 
+    logger.info("Creating indexes for performance optimization…")
+
     con.execute("""
     CREATE INDEX IF NOT EXISTS idx_mt_group
         ON merged_transitions(alignment_group_id);
@@ -1028,6 +1030,7 @@ def pre_propagate_evidence(config: IPFIOConfig):
     # 5) chunk *by* alignment_group_id so you never split a group
     # -------------------------------------------------------------
 
+    logger.info("Getting total number of groups to process…")
     total_groups = con.execute("""
     SELECT COUNT(DISTINCT alignment_group_id)
     FROM merged_transitions
