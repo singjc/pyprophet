@@ -210,7 +210,7 @@ def transfer_confident_evidence_across_runs(
                 (df1["feature_id"] != feature_id)
                 & (df1["pep"] <= across_run_confidence_threshold)
             )
-        ]
+        ].copy()
         tmp_df["feature_id"] = feature_id
         df_list.append(tmp_df)
     df_filtered = pd.concat(df_list)
