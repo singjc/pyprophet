@@ -3,9 +3,12 @@ from loguru import logger
 
 from .util import transform_betas, write_logfile, measure_memory_usage_and_time
 from .._config import IPFIOConfig
-from ..ipf import infer_peptidoforms
-from ..ipf_bayenet import infer_peptidoforms as infer_peptidoforms_bayenet
+from ..ipf import infer_peptidoforms, pre_propagate_evidence
+
+# from ..ipf_bayenet import infer_peptidoforms as infer_peptidoforms_bayenet
 from ..glyco.glycoform import infer_glycoforms
+
+infer_peptidoforms_bayenet = None
 
 
 # IPF
@@ -110,6 +113,18 @@ from ..glyco.glycoform import infer_glycoforms
     type=int,
     help="Batch size for processing the input file. Adjust based on available memory.",
 )
+@click.option(
+    "--create_propagation_db/--no-create_propagation_db",
+    default=False,
+    show_default=True,
+    help="[Experimental] Create propagation database.",
+)
+@click.option(
+    "--re_create_tables/--no-re_create_tables",
+    default=False,
+    show_default=True,
+    help="[Experimental] Re-create tables for duckdb pre-propagated evidence.",
+)
 # Bayesian Network Model Parameters
 @click.option(
     "--use_bayenet/--no-use_bayenet",
@@ -166,6 +181,8 @@ def ipf(
     ipf_max_alignment_pep,
     across_run_confidence_threshold,
     batch_size,
+    create_propagation_db,
+    re_create_tables,
     use_bayenet,
     use_beta,
     num_steps,
@@ -206,6 +223,7 @@ def ipf(
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
         batch_size=batch_size,
+        re_create_tables=re_create_tables,
         use_bayenet=use_bayenet,
         use_beta=use_beta,
         num_steps=num_steps,
@@ -217,6 +235,8 @@ def ipf(
     )
     if use_bayenet:  # Generative BHM
         infer_peptidoforms_bayenet(config)
+    elif create_propagation_db:
+        pre_propagate_evidence(config)
     else:  # Base flat BHM
         infer_peptidoforms(config)
 

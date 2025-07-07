@@ -27,8 +27,12 @@ Classes:
     None
 """
 
+import os
+import glob
+from itertools import islice
 import numpy as np
 import pandas as pd
+import duckdb
 from loguru import logger
 from scipy.stats import rankdata
 import matplotlib as mpl
@@ -908,3 +912,184 @@ def infer_peptidoforms(config: IPFIOConfig):
     pdf_handle.close()
     writer = WriterDispatcher.get_writer(config)
     writer.save_results(result=peptidoform_data)
+
+
+def pre_propagate_evidence(config: IPFIOConfig):
+    """
+    Pre-propagates evidence across aligned runs. Creates a
+
+    Args:
+        config (IPFIOConfig): Configuration object for the IPF workflow.
+
+    Returns:
+        None
+    """
+    logger.info("Pre-propagating evidence across aligned runs.")
+
+    re_create_tables = config.re_create_tables
+    chunk_size = config.batch_size
+
+    # --- connect to on-disk DuckDB -------------------------------
+    con = duckdb.connect("filtered.duckdb")
+    con.execute(f"PRAGMA threads={os.cpu_count() - 1}")
+
+    # --- list your parquet files & threshold ---------------------
+    pep_threshold = config.ipf_max_transition_pep
+    across_run_confidence_threshold = config.across_run_confidence_threshold
+
+    # 1) read & register your alignment map
+    if re_create_tables:
+        reader = ReaderDispatcher.get_reader(config)
+        across_run_feature_map = reader.read(level="alignment")
+        con.register("across_run_feature_map_tbl", across_run_feature_map)
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS across_run_feature_map AS
+        SELECT * FROM across_run_feature_map_tbl
+        """)
+        del across_run_feature_map
+        con.unregister("across_run_feature_map_tbl")
+
+    # 2) build feature → run lookup
+    if re_create_tables:
+        precursor_files = glob.glob("oswpq/*.oswpq/precursors_features.parquet")
+        transition_files = glob.glob("oswpq/*.oswpq/transition_features.parquet")
+        con.execute(f"""
+        CREATE TABLE IF NOT EXISTS feature_run_map AS
+        SELECT DISTINCT
+            FEATURE_ID AS feature_id,
+            RUN_ID     AS run_id
+        FROM read_parquet({precursor_files}, hive_partitioning=1)
+        ;
+        """)
+
+    # 3) filter & persist transition‐level PEPs
+    if re_create_tables:
+        con.execute(f"""
+        CREATE TABLE IF NOT EXISTS filtered_transitions AS
+        SELECT
+            FEATURE_ID          AS feature_id,
+            TRANSITION_ID       AS transition_id,
+            IPF_PEPTIDE_ID      AS peptide_id,
+            SCORE_TRANSITION_PEP AS pep
+        FROM read_parquet({transition_files}, hive_partitioning=1)
+        WHERE
+            TRANSITION_TYPE         <> ''
+        AND TRANSITION_DECOY       =  0
+        AND SCORE_TRANSITION_SCORE IS NOT NULL
+        AND SCORE_TRANSITION_PEP   <  {pep_threshold}
+        ;
+        """)
+
+    # 4) join in run_id & alignment_group_id
+    if re_create_tables:
+        con.execute("""
+        CREATE TABLE IF NOT EXISTS merged_transitions AS
+        SELECT
+            f.run_id,
+            t.*,
+            COALESCE(m.alignment_group_id, t.feature_id) AS alignment_group_id
+        FROM filtered_transitions AS t
+        LEFT JOIN feature_run_map         AS f USING(feature_id)
+        LEFT JOIN across_run_feature_map AS m USING(feature_id)
+        ;
+        """)
+
+    # ── helper to chunk an iterable ────────────────────────────────
+    def chunked(iterable, size):
+        it = iter(iterable)
+        while True:
+            batch = list(islice(it, size))
+            if not batch:
+                return
+            yield batch
+
+    # 5.1) make sure we have a table to remember which groups ran
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS processed_groups (
+    id BIGINT PRIMARY KEY
+    )
+    """)
+
+    # 5) chunk *by* alignment_group_id so you never split a group
+    # -------------------------------------------------------------
+
+    while True:
+        # 5a) grab all IDs needing propagation
+        # fetch only *unprocessed* alignment_group_ids
+        group_ids = [
+            r[0]
+            for r in con.execute("""
+            SELECT DISTINCT alignment_group_id
+            FROM merged_transitions
+            WHERE feature_id != alignment_group_id
+            AND alignment_group_id NOT IN (SELECT id FROM processed_groups)
+        """).fetchall()
+        ]
+        if not group_ids:
+            print("✅ all done!")
+            break
+        print(
+            f"Found {len(group_ids)} alignment groups needing propagation.", flush=True
+        )
+        # 5b) process in batches of, say, 500 groups at a time
+        for i, batch in enumerate(chunked(group_ids, chunk_size), start=1):
+            print(
+                f"[{i} of {len(group_ids) // chunk_size + 1}] propagating {len(batch)} groups…",
+                flush=True,
+            )
+            ids = ",".join(map(str, batch))
+            # pull *all* rows for these groups in one go
+            df_chunk = con.execute(f"""
+                SELECT *
+                FROM merged_transitions
+                WHERE alignment_group_id IN ({ids})
+                AND feature_id != alignment_group_id
+            """).df()
+            # apply your Python propagation
+            df_prop = transfer_confident_evidence_across_runs(
+                df_chunk,
+                across_run_confidence_threshold,
+                group_cols=[
+                    "run_id",
+                    "feature_id",
+                    "transition_id",
+                    "peptide_id",
+                    "alignment_group_id",
+                ],
+                value_cols=["pep"],
+            )
+            # write them back, then free memory immediately
+            con.register("tmp", df_prop)
+            # start a manual transaction
+            con.execute("BEGIN TRANSACTION;")
+            try:
+                # your delete + insert here
+                con.execute("""
+                DELETE FROM merged_transitions
+                USING tmp
+                WHERE merged_transitions.run_id             = tmp.run_id
+                    AND merged_transitions.feature_id         = tmp.feature_id
+                    AND merged_transitions.transition_id      = tmp.transition_id
+                    AND merged_transitions.alignment_group_id = tmp.alignment_group_id
+                """)
+                con.execute("""
+                INSERT INTO merged_transitions
+                SELECT * FROM tmp
+                """)
+                # now mark these groups as done
+                # we can bulk-insert them
+                values = ",".join(f"({g})" for g in batch)
+                con.execute(f"""
+                INSERT INTO processed_groups(id)
+                VALUES {values}
+                ON CONFLICT DO NOTHING   -- ignore duplicates
+                """)
+            except Exception:
+                # undo everything in this transaction
+                con.execute("ROLLBACK;")
+                raise
+            else:
+                # make it permanent
+                con.execute("COMMIT;")
+            con.unregister("tmp")
+            del df_chunk, df_prop

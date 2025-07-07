@@ -478,6 +478,9 @@ class IPFIOConfig(BaseIOConfig):
     across_run_confidence_threshold: float = 0.5
     batch_size: int = 100_000
 
+    # Pre-propagation of evidence duckdb
+    re_create_tables: bool = False
+
     # Generative Bayesian Hierarchical Network Model
     use_bayenet: bool = False
     learned_params_path: Optional[str] = None
@@ -515,6 +518,7 @@ class IPFIOConfig(BaseIOConfig):
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
         batch_size,
+        re_create_tables,
         use_bayenet,
         use_beta,
         num_steps,
@@ -548,6 +552,7 @@ class IPFIOConfig(BaseIOConfig):
             ipf_max_alignment_pep=ipf_max_alignment_pep,
             across_run_confidence_threshold=across_run_confidence_threshold,
             batch_size=batch_size,
+            re_create_tables=re_create_tables,
             use_bayenet=use_bayenet,
             use_beta=use_beta,
             num_steps=num_steps,
