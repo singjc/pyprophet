@@ -965,36 +965,6 @@ def infer_peptidoforms(config: IPFIOConfig):
     writer.save_results(result=peptidoform_data)
 
 
-@duckdb.register_python(
-    name="propagate_pep",
-    return_type=(
-        "TABLE("
-        "run_id        BIGINT, "
-        "feature_id    BIGINT, "
-        "transition_id BIGINT, "
-        "peptide_id    BIGINT, "
-        "alignment_group_id BIGINT, "
-        "pep           DOUBLE"
-        ")"
-    ),
-)
-def propagate_pep_py(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
-    # call your vectorized function on the incoming chunk
-    # note: we assume df already has exactly the six columns listed above
-    return transfer_confident_evidence_across_runs(
-        df,
-        across_run_confidence_threshold=threshold,
-        group_cols=[
-            "run_id",
-            "feature_id",
-            "transition_id",
-            "peptide_id",
-            "alignment_group_id",
-        ],
-        value_cols=["pep"],
-    )
-
-
 def pre_propagate_evidence(config: IPFIOConfig):
     """
     Pre-propagates evidence across aligned runs. Creates a
@@ -1142,7 +1112,7 @@ def pre_propagate_evidence(config: IPFIOConfig):
         # 1) grab the next batch of groups
         rows = con.execute(f"""
         SELECT DISTINCT alignment_group_id
-        FROM merged_transitions
+            FROM merged_transitions
         WHERE feature_id != alignment_group_id
             AND alignment_group_id NOT IN (SELECT id FROM processed_groups)
         LIMIT {chunk_size}
@@ -1162,52 +1132,58 @@ def pre_propagate_evidence(config: IPFIOConfig):
         )
         ids = ",".join(map(str, batch))
 
-        # 2–3) call your UDF in SQL to build tmp
+        # 2) build tmp entirely in SQL:
+        #    a) find, per (transition_id, alignment_group_id), the min pep ≤ threshold
+        #    b) join back and for each row take LEAST(original pep, min_pep)
         con.execute(f"""
         CREATE TEMP TABLE tmp AS
-            SELECT *
-            FROM propagate_pep(
-                ( SELECT
-                    run_id,
-                    feature_id,
-                    transition_id,
-                    peptide_id,
-                    alignment_group_id,
-                    pep
-                FROM merged_transitions
-                WHERE alignment_group_id IN ({ids})
-                AND feature_id != alignment_group_id
-                ),
-                {across_run_confidence_threshold}
-            );
+        WITH best_pep AS (
+            SELECT
+            transition_id,
+            alignment_group_id,
+            MIN(pep) AS min_pep
+            FROM merged_transitions
+            WHERE alignment_group_id IN ({ids})
+            AND feature_id != alignment_group_id
+            AND pep <= {across_run_confidence_threshold}
+            GROUP BY transition_id, alignment_group_id
+        )
+        SELECT
+        m.run_id,
+        m.feature_id,
+        m.transition_id,
+        m.peptide_id,
+        m.alignment_group_id,
+        LEAST(m.pep, bp.min_pep) AS pep
+        FROM merged_transitions AS m
+        LEFT JOIN best_pep AS bp
+        USING (transition_id, alignment_group_id)
+        WHERE m.alignment_group_id IN ({ids})
+        AND m.feature_id != m.alignment_group_id;
         """)
 
-        # 4) write-back inside a manual transaction
+        # 3) write-back inside a manual transaction
         con.execute("BEGIN TRANSACTION;")
         try:
             con.execute("""
             DELETE FROM merged_transitions
             USING tmp
             WHERE merged_transitions.run_id             = tmp.run_id
-                AND merged_transitions.feature_id         = tmp.feature_id
-                AND merged_transitions.transition_id      = tmp.transition_id
-                AND merged_transitions.alignment_group_id = tmp.alignment_group_id
+            AND merged_transitions.feature_id         = tmp.feature_id
+            AND merged_transitions.transition_id      = tmp.transition_id
+            AND merged_transitions.alignment_group_id = tmp.alignment_group_id
             """)
-            con.execute("""
-            INSERT INTO merged_transitions
-            SELECT * FROM tmp
-            """)
+            con.execute("INSERT INTO merged_transitions SELECT * FROM tmp")
             vals = ",".join(f"({g})" for g in batch)
             con.execute(f"""
             INSERT INTO processed_groups(id)
             VALUES {vals}
             ON CONFLICT DO NOTHING
             """)
-        except Exception:
+        except:
             con.execute("ROLLBACK;")
             raise
         else:
             con.execute("COMMIT;")
         finally:
-            # remove our temp table so the next iteration starts clean
             con.execute("DROP TABLE IF EXISTS tmp;")
