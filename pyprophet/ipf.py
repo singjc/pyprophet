@@ -32,6 +32,7 @@ import os
 import glob
 from typing import List
 from itertools import islice
+import psutil
 import numpy as np
 import pandas as pd
 import duckdb
@@ -988,16 +989,27 @@ def pre_propagate_evidence(config: IPFIOConfig):
         logger.info("Tuning DuckDB for disk‐backed sorts…")
 
         # 1) point temp files at a drive with plenty of free space
-        con.execute("SET temp_directory = '/media/roestlab/Data2/User/singjust/tmp';")
+        con.execute(f"SET temp_directory = '{config.temp_dir}';")
 
         # 2) allow up to 500 GB of spill space
         con.execute("SET max_temp_directory_size = '500GB';")
 
         # 3) cap in-memory buffer at, say, 120 GB (so sorting spills early)
-        con.execute("SET memory_limit = '120GB';")
+        # 2) compute 85% of free memory
+        mem = psutil.virtual_memory()
+        free_bytes = mem.available
+        limit_bytes = int(free_bytes * 0.85)
+        gb = limit_bytes // (1024**3)
+        limit_str = f"{gb}GB"
+        con.execute(f"SET memory_limit = '{limit_str}';")
 
         # 4) optionally reduce parallelism for lower per-thread footprints
         con.execute(f"SET threads = {os.cpu_count() - 1};")
+
+        logger.info(
+            f"Using {config.temp_dir} for temporary files, "
+            f"max spill size of 500 GB, and memory limit of {limit_str} for early spills."
+        )
 
     # --- list your parquet files & threshold ---------------------
     pep_threshold = config.ipf_max_transition_pep
