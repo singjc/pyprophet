@@ -477,6 +477,7 @@ class IPFIOConfig(BaseIOConfig):
     ipf_max_alignment_pep: float = 0.7
     across_run_confidence_threshold: float = 0.5
     batch_size: int = 100_000
+    generate_report: bool = True  # Generate a report PDF with IPF results
 
     # Pre-propagation of evidence duckdb
     re_create_tables: bool = False
@@ -520,6 +521,7 @@ class IPFIOConfig(BaseIOConfig):
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
         batch_size,
+        generate_report,
         re_create_tables,
         add_indices,
         temp_dir,
@@ -556,6 +558,7 @@ class IPFIOConfig(BaseIOConfig):
             ipf_max_alignment_pep=ipf_max_alignment_pep,
             across_run_confidence_threshold=across_run_confidence_threshold,
             batch_size=batch_size,
+            generate_report=generate_report,
             re_create_tables=re_create_tables,
             add_indices=add_indices,
             temp_dir=temp_dir,

@@ -114,6 +114,12 @@ infer_peptidoforms_bayenet = None
     help="Batch size for processing the input file. Adjust based on available memory.",
 )
 @click.option(
+    "--generate_report/--no-generate_report",
+    default=True,
+    show_default=True,
+    help="Generate a report of the inference process.",
+)
+@click.option(
     "--create_propagation_db/--no-create_propagation_db",
     default=False,
     show_default=True,
@@ -199,6 +205,7 @@ def ipf(
     ipf_max_alignment_pep,
     across_run_confidence_threshold,
     batch_size,
+    generate_report,
     create_propagation_db,
     re_create_tables,
     add_indices,
@@ -243,6 +250,7 @@ def ipf(
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
         batch_size=batch_size,
+        generate_report=generate_report,
         re_create_tables=re_create_tables,
         add_indices=add_indices,
         temp_dir=temp_dir,
