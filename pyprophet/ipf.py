@@ -30,6 +30,7 @@ Classes:
 import math
 import os
 import glob
+from typing import List
 from itertools import islice
 import numpy as np
 import pandas as pd
@@ -177,10 +178,55 @@ def prepare_precursor_bm(data):
     return precursor_bm_data
 
 
+# def transfer_confident_evidence_across_runs(
+#     df1,
+#     across_run_confidence_threshold,
+#     group_cols=[
+#         "feature_id",
+#         "transition_id",
+#         "peptide_id",
+#         "bmask",
+#         "num_peptidoforms",
+#         "alignment_group_id",
+#     ],
+#     value_cols=["pep", "precursor_peakgroup_pep"],
+# ):
+#     """
+#     Propagates confident evidence across aligned runs.
+
+#     Args:
+#         df1 (pd.DataFrame): Input data containing feature-level information.
+#         across_run_confidence_threshold (float): Confidence threshold for propagation.
+#         group_cols (list): Columns to group by during propagation.
+#         value_cols (list): Columns to apply the minimum reduction.
+
+#     Returns:
+#         pd.DataFrame: Data with propagated evidence across runs.
+#     """
+#     feature_ids = np.unique(df1["feature_id"])
+#     df_list = []
+#     for feature_id in feature_ids:
+#         tmp_df = df1[
+#             (df1["feature_id"] == feature_id)
+#             | (
+#                 (df1["feature_id"] != feature_id)
+#                 & (df1["pep"] <= across_run_confidence_threshold)
+#             )
+#         ].copy()
+#         tmp_df["feature_id"] = feature_id
+#         df_list.append(tmp_df)
+#     df_filtered = pd.concat(df_list)
+
+#     # Group by relevant columns and apply min reduction
+#     df_result = df_filtered.groupby(group_cols, as_index=False)[value_cols].min()
+
+#     return df_result
+
+
 def transfer_confident_evidence_across_runs(
-    df1,
-    across_run_confidence_threshold,
-    group_cols=[
+    df: pd.DataFrame,
+    across_run_confidence_threshold: float,
+    group_cols: List[str] = [
         "feature_id",
         "transition_id",
         "peptide_id",
@@ -188,38 +234,42 @@ def transfer_confident_evidence_across_runs(
         "num_peptidoforms",
         "alignment_group_id",
     ],
-    value_cols=["pep", "precursor_peakgroup_pep"],
-):
+    value_cols: List[str] = ["pep", "precursor_peakgroup_pep"],
+) -> pd.DataFrame:
     """
-    Propagates confident evidence across aligned runs.
+    Vectorized propagation of low‐pep evidence across runs.
 
     Args:
-        df1 (pd.DataFrame): Input data containing feature-level information.
-        across_run_confidence_threshold (float): Confidence threshold for propagation.
-        group_cols (list): Columns to group by during propagation.
-        value_cols (list): Columns to apply the minimum reduction.
+        df: input DataFrame, must contain at least all group_cols + value_cols.
+        across_run_confidence_threshold: propagate rows with pep <= this.
+        group_cols: columns to group by in final output (must include 'feature_id').
+        value_cols: numeric columns to apply a `min` reduction.
 
     Returns:
-        pd.DataFrame: Data with propagated evidence across runs.
+        df with the same columns as `group_cols + value_cols`, where each
+        value_col has been replaced by min(original, propagated).
     """
-    feature_ids = np.unique(df1["feature_id"])
-    df_list = []
-    for feature_id in feature_ids:
-        tmp_df = df1[
-            (df1["feature_id"] == feature_id)
-            | (
-                (df1["feature_id"] != feature_id)
-                & (df1["pep"] <= across_run_confidence_threshold)
-            )
-        ].copy()
-        tmp_df["feature_id"] = feature_id
-        df_list.append(tmp_df)
-    df_filtered = pd.concat(df_list)
+    # 1) bucket keys = everything except feature_id
+    propagate_keys = [c for c in group_cols if c != "feature_id"]
 
-    # Group by relevant columns and apply min reduction
-    df_result = df_filtered.groupby(group_cols, as_index=False)[value_cols].min()
+    # 2) compute per-bucket minima *only* among rows with pep <= threshold
+    low = df[df["pep"] <= across_run_confidence_threshold]
+    best = (
+        low.groupby(propagate_keys, as_index=False)[value_cols]
+        .min()
+        .rename(columns={c: f"best_{c}" for c in value_cols})
+    )
 
-    return df_result
+    # 3) merge those minima back onto every row
+    merged = df.merge(best, on=propagate_keys, how="left")
+
+    # 4) for each value_col, take the elementwise min(original, best)
+    for col in value_cols:
+        merged[col] = merged[[col, f"best_{col}"]].min(axis=1)
+
+    # 5) drop the helper columns and return only the requested columns
+    drop_cols = [f"best_{c}" for c in value_cols]
+    return merged.drop(columns=drop_cols)[group_cols + value_cols]
 
 
 def prepare_transition_bm(
