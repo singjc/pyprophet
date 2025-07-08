@@ -811,8 +811,7 @@ def plot_peptidoform_inference(
     else:
         vmax = 1.0
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    sc = ax.scatter(
+    sc = ax8.scatter(
         hypo_idx,  # x = hypothesis
         feat_idx,  # y = feature index (0…N_features-1)
         c=vals,  # color = posterior
@@ -822,10 +821,10 @@ def plot_peptidoform_inference(
         vmax=vmax,  # same vmax you computed before
         alpha=0.6,
     )
-    ax.set_title("Dotmap of non-zero posterior")
-    ax.set_xlabel("hypothesis")
-    ax.set_ylabel("feature index")
-    cbar = fig.colorbar(sc, ax=ax, label="posterior")
+    ax8.set_title("Dotmap of non-zero posterior")
+    ax8.set_xlabel("hypothesis")
+    ax8.set_ylabel("feature index")
+    cbar = fig.colorbar(sc, ax=ax8, label="posterior")
 
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     pdf_handle.savefig(fig)
@@ -847,7 +846,8 @@ def infer_peptidoforms(config: IPFIOConfig):
     batch_size = config.batch_size
 
     reader = ReaderDispatcher.get_reader(config)
-    pdf_handle = PdfPages(f"{config.prefix}_ipf_report.pdf")
+    if config.generate_report:
+        pdf_handle = PdfPages(f"{config.prefix}_ipf_report.pdf")
 
     # precursor level
     precursor_table = reader.read(level="peakgroup_precursor", peptide_ids=None)
@@ -858,7 +858,8 @@ def infer_peptidoforms(config: IPFIOConfig):
         config.ipf_max_precursor_pep,
         config.ipf_max_precursor_peakgroup_pep,
     )
-    plot_precursor_inference(pdf_handle, precursor_table, precursor_data)
+    if config.generate_report:
+        plot_precursor_inference(pdf_handle, precursor_table, precursor_data)
 
     # get peptide ids
     peptidoform_group_mapping = reader.read(level="peptide_ids")
@@ -927,13 +928,13 @@ def infer_peptidoforms(config: IPFIOConfig):
             config.propagate_signal_across_runs,
             config.across_run_confidence_threshold,
         )
-
-        plot_peptidoform_inference(
-            pdf_handle,
-            peptidoform_table,
-            peptidoform_data,
-            precursor_data=precursor_data,
-        )
+        if config.generate_report:
+            plot_peptidoform_inference(
+                pdf_handle,
+                peptidoform_table,
+                peptidoform_data,
+                precursor_data=precursor_data,
+            )
 
         # finalize results and write to table
         peptidoform_data = peptidoform_data[peptidoform_data["hypothesis"] != -1][
@@ -963,7 +964,8 @@ def infer_peptidoforms(config: IPFIOConfig):
     logger.info(
         f"Number of unique feature-peptidoform pairs at <= 1% QVALUE: {num_unique_peptides['FEATURE_ID'].nunique()} features, {num_unique_peptides['PEPTIDE_ID'].nunique()} peptides."
     )
-    pdf_handle.close()
+    if config.generate_report:
+        pdf_handle.close()
     writer = WriterDispatcher.get_writer(config)
     writer.save_results(result=peptidoform_data)
 
