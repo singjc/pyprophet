@@ -483,6 +483,7 @@ class IPFIOConfig(BaseIOConfig):
     re_create_tables: bool = False
     add_indices: bool = False  # Add indices to duckdb tables for faster queries
     temp_dir: Optional[str] = None  # Temporary directory for duckdb files
+    max_temp_dir_size: str = "500GB"  # Maximum size of the temporary directory
 
     # Generative Bayesian Hierarchical Network Model
     use_bayenet: bool = False
@@ -525,6 +526,7 @@ class IPFIOConfig(BaseIOConfig):
         re_create_tables,
         add_indices,
         temp_dir,
+        max_temp_dir_size,
         use_bayenet,
         use_beta,
         num_steps,
@@ -562,6 +564,7 @@ class IPFIOConfig(BaseIOConfig):
             re_create_tables=re_create_tables,
             add_indices=add_indices,
             temp_dir=temp_dir,
+            max_temp_dir_size=max_temp_dir_size,
             use_bayenet=use_bayenet,
             use_beta=use_beta,
             num_steps=num_steps,

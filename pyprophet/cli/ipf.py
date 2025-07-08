@@ -138,6 +138,13 @@ infer_peptidoforms_bayenet = None
     help="Add indices to the duckdb tables for faster queries. This is only relevant if `--create_propagation_db` is enabled.",
 )
 @click.option(
+    "--max_temp_dir_size",
+    type=click.STRING,
+    required=False,
+    default="500GB",
+    help="Maximum size of the temporary directory for duckdb. Specify in bytes (e.g., '500GB', '100MB').",
+)
+@click.option(
     "--temp_dir",
     type=click.Path(
         exists=True,
@@ -210,6 +217,7 @@ def ipf(
     re_create_tables,
     add_indices,
     temp_dir,
+    max_temp_dir_size,
     use_bayenet,
     use_beta,
     num_steps,
@@ -254,6 +262,7 @@ def ipf(
         re_create_tables=re_create_tables,
         add_indices=add_indices,
         temp_dir=temp_dir,
+        max_temp_dir_size=max_temp_dir_size,
         use_bayenet=use_bayenet,
         use_beta=use_beta,
         num_steps=num_steps,

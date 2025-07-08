@@ -996,7 +996,7 @@ def pre_propagate_evidence(config: IPFIOConfig):
         con.execute(f"SET temp_directory = '{config.temp_dir}';")
 
         # 2) allow up to 500 GB of spill space
-        con.execute("SET max_temp_directory_size = '500GB';")
+        con.execute(f"SET max_temp_directory_size = '{config.max_temp_dir_size}';")
 
         # 3) cap in-memory buffer at, say, 120 GB (so sorting spills early)
         # 2) compute 85% of free memory
@@ -1012,7 +1012,7 @@ def pre_propagate_evidence(config: IPFIOConfig):
 
         logger.info(
             f"Using {config.temp_dir} for temporary files, "
-            f"max spill size of 500 GB, and memory limit of {limit_str} for early spills."
+            f"max spill size of {config.max_temp_dir_size}, and memory limit of {limit_str} for early spills."
         )
 
     # --- list your parquet files & threshold ---------------------
