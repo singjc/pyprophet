@@ -794,36 +794,38 @@ def plot_peptidoform_inference(
     logger.debug("Plotting feature × hypothesis posterior heatmap …")
     ax8 = fig.add_subplot(4, 2, 8)
 
-    # pivot into matrix
-    pivot = (
-        df_merge[df_merge["hypothesis"] != -1]
-        .pivot(index="feature_id", columns="hypothesis", values="posterior")
-        .fillna(0)
-    )
+    # extract only non-zero calls
+    df_nz = df_merge[df_merge.hypothesis != -1].loc[
+        lambda d: d.posterior > 0, ["feature_id", "hypothesis", "posterior"]
+    ]
+
+    # factorize feature_id to a simple integer index
+    feat_idx, feat_uniques = pd.factorize(df_nz.feature_id)
+    hypo_idx = df_nz.hypothesis.values
+    vals = df_nz.posterior.values
 
     # find a high percentile of the nonzero values to saturate at (e.g. 95th percentile)
-    nonzero = pivot.values[pivot.values > 0]
+    nonzero = vals[vals > 0]
     if len(nonzero):
         vmax = np.percentile(nonzero, 95)
     else:
         vmax = 1.0
 
-    # plot with a high‐contrast colormap and clipped vmax
-    cax = ax8.imshow(
-        pivot.values,
-        aspect="auto",
-        interpolation="nearest",
+    fig, ax = plt.subplots(figsize=(6, 6))
+    sc = ax.scatter(
+        hypo_idx,  # x = hypothesis
+        feat_idx,  # y = feature index (0…N_features-1)
+        c=vals,  # color = posterior
+        s=1,  # very small markers
         cmap="magma",
         vmin=0,
-        vmax=vmax,
+        vmax=vmax,  # same vmax you computed before
+        alpha=0.6,
     )
-
-    ax8.set_title("Feature × Peptidoform posterior heatmap")
-    ax8.set_xlabel("hypothesis")
-    ax8.set_ylabel("feature index")
-
-    # add colorbar, note it shows 0 → vmax
-    cbar = fig.colorbar(cax, ax=ax8, label="posterior (0–95th pct)")
+    ax.set_title("Dotmap of non-zero posterior")
+    ax.set_xlabel("hypothesis")
+    ax.set_ylabel("feature index")
+    cbar = fig.colorbar(sc, ax=ax, label="posterior")
 
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     pdf_handle.savefig(fig)
