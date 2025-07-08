@@ -125,6 +125,24 @@ infer_peptidoforms_bayenet = None
     show_default=True,
     help="[Experimental] Re-create tables for duckdb pre-propagated evidence.",
 )
+@click.option(
+    "--add_indices/--no-add_indices",
+    default=False,
+    show_default=True,
+    help="Add indices to the duckdb tables for faster queries. This is only relevant if `--create_propagation_db` is enabled.",
+)
+@click.option(
+    "--temp_dir",
+    type=click.Path(
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+    ),
+    required=False,
+    default=None,
+    help="Temporary directory for duckdb",
+)
 # Bayesian Network Model Parameters
 @click.option(
     "--use_bayenet/--no-use_bayenet",
@@ -183,6 +201,8 @@ def ipf(
     batch_size,
     create_propagation_db,
     re_create_tables,
+    add_indices,
+    temp_dir,
     use_bayenet,
     use_beta,
     num_steps,
@@ -224,6 +244,8 @@ def ipf(
         across_run_confidence_threshold,
         batch_size=batch_size,
         re_create_tables=re_create_tables,
+        add_indices=add_indices,
+        temp_dir=temp_dir,
         use_bayenet=use_bayenet,
         use_beta=use_beta,
         num_steps=num_steps,

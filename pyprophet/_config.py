@@ -480,6 +480,8 @@ class IPFIOConfig(BaseIOConfig):
 
     # Pre-propagation of evidence duckdb
     re_create_tables: bool = False
+    add_indices: bool = False  # Add indices to duckdb tables for faster queries
+    temp_dir: Optional[str] = None  # Temporary directory for duckdb files
 
     # Generative Bayesian Hierarchical Network Model
     use_bayenet: bool = False
@@ -519,6 +521,8 @@ class IPFIOConfig(BaseIOConfig):
         across_run_confidence_threshold,
         batch_size,
         re_create_tables,
+        add_indices,
+        temp_dir,
         use_bayenet,
         use_beta,
         num_steps,
@@ -553,6 +557,8 @@ class IPFIOConfig(BaseIOConfig):
             across_run_confidence_threshold=across_run_confidence_threshold,
             batch_size=batch_size,
             re_create_tables=re_create_tables,
+            add_indices=add_indices,
+            temp_dir=temp_dir,
             use_bayenet=use_bayenet,
             use_beta=use_beta,
             num_steps=num_steps,

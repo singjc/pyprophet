@@ -934,19 +934,20 @@ def pre_propagate_evidence(config: IPFIOConfig):
     con = duckdb.connect("filtered.duckdb")
     con.execute(f"PRAGMA threads={os.cpu_count() - 1}")
 
-    logger.info("Tuning DuckDB for disk‐backed sorts…")
+    if config.temp_dir is not None:
+        logger.info("Tuning DuckDB for disk‐backed sorts…")
 
-    # 1) point temp files at a drive with plenty of free space
-    con.execute("SET temp_directory = '/media/roestlab/Data2/User/singjust/tmp';")
+        # 1) point temp files at a drive with plenty of free space
+        con.execute("SET temp_directory = '/media/roestlab/Data2/User/singjust/tmp';")
 
-    # 2) allow up to 500 GB of spill space
-    con.execute("SET max_temp_directory_size = '500GB';")
+        # 2) allow up to 500 GB of spill space
+        con.execute("SET max_temp_directory_size = '500GB';")
 
-    # 3) cap in-memory buffer at, say, 120 GB (so sorting spills early)
-    con.execute("SET memory_limit = '120GB';")
+        # 3) cap in-memory buffer at, say, 120 GB (so sorting spills early)
+        con.execute("SET memory_limit = '120GB';")
 
-    # 4) optionally reduce parallelism for lower per-thread footprints
-    con.execute(f"SET threads = {os.cpu_count() - 1};")
+        # 4) optionally reduce parallelism for lower per-thread footprints
+        con.execute(f"SET threads = {os.cpu_count() - 1};")
 
     # --- list your parquet files & threshold ---------------------
     pep_threshold = config.ipf_max_transition_pep
@@ -1030,16 +1031,17 @@ def pre_propagate_evidence(config: IPFIOConfig):
     )
     """)
 
-    logger.info("Creating indexes for performance optimization…")
+    if config.add_indices:
+        logger.info("Creating indexes for performance optimization…")
 
-    con.execute("""
-    CREATE INDEX IF NOT EXISTS idx_mt_group
-        ON merged_transitions(alignment_group_id);
-    """)
-    con.execute("""
-    CREATE INDEX IF NOT EXISTS idx_pg_id
-        ON processed_groups(id);
-    """)
+        con.execute("""
+        CREATE INDEX IF NOT EXISTS idx_mt_group
+            ON merged_transitions(alignment_group_id);
+        """)
+        con.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pg_id
+            ON processed_groups(id);
+        """)
 
     # 5) chunk *by* alignment_group_id so you never split a group
     # -------------------------------------------------------------
