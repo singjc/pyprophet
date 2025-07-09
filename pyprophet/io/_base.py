@@ -1286,9 +1286,13 @@ class BaseSplitParquetReader(BaseParquetReader):
         In multi-run mode, uses the first run's file as a representative.
         """
         if self._is_multi_run:
-            candidate = glob.glob(
-                os.path.join(self.config.infile, "*.oswpq", parquet_file)
-            )
+            if parquet_file == "feature_alignment.parquet":
+                # We expect the feature alignment file to be in the base directory
+                candidate = glob.glob(os.path.join(self.config.infile, parquet_file))
+            else:
+                candidate = glob.glob(
+                    os.path.join(self.config.infile, "*.oswpq", parquet_file)
+                )
             if not candidate:
                 raise click.ClickException(
                     f"Could not find '{parquet_file}' in any '.oswpq' subdirectory of '{self.config.infile}'."
