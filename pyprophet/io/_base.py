@@ -951,9 +951,14 @@ class BaseParquetReader(BaseReader):
 
         if self.config.context == "ipf" and config.propagate_signal_across_runs:
             # We make the assumption that the alignment file is in the same directory as the input file
-            self.alignment_file = os.path.join(
-                os.path.dirname(self.infile), "feature_alignment.parquet"
-            )
+            if self.config.file_type in ("parquet_split", "parquet_split_multi"):
+                self.alignment_file = os.path.join(
+                    self.infile, "feature_alignment.parquet"
+                )
+            else:
+                self.alignment_file = os.path.join(
+                    os.path.dirname(self.infile), "feature_alignment.parquet"
+                )
             if not os.path.exists(self.alignment_file):
                 raise click.ClickException(
                     f"To use the --propagate-signal-across-runs option, "
