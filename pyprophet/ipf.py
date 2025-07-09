@@ -273,9 +273,7 @@ def transfer_confident_evidence_across_runs(
     return merged.drop(columns=drop_cols)[group_cols + value_cols]
 
 
-def prepare_transition_bm(
-    data, propagate_signal_across_runs, across_run_confidence_threshold
-):
+def prepare_transition_bm(data, propagate_signal_across_runs):
     """
     Prepares Bayesian model data for transition-level inference.
 
@@ -287,29 +285,29 @@ def prepare_transition_bm(
     Returns:
         pd.DataFrame: Bayesian model data for transition-level inference.
     """
-    # Propagate peps <= threshold for aligned feature groups across runs
-    if propagate_signal_across_runs:
-        ## Separate out features that need propagation and those that don't to avoid calling apply on the features that don't need propagated peps
-        non_prop_data = data.loc[data["feature_id"] == data["alignment_group_id"]]
-        prop_data = data.loc[data["feature_id"] != data["alignment_group_id"]]
+    # # Propagate peps <= threshold for aligned feature groups across runs
+    # if propagate_signal_across_runs:
+    #     ## Separate out features that need propagation and those that don't to avoid calling apply on the features that don't need propagated peps
+    #     non_prop_data = data.loc[data["feature_id"] == data["alignment_group_id"]]
+    #     prop_data = data.loc[data["feature_id"] != data["alignment_group_id"]]
 
-        # Group by alignment_group_id and apply function in parallel
-        data_with_confidence = (
-            prop_data.groupby("alignment_group_id", group_keys=False)
-            .apply(
-                lambda df: transfer_confident_evidence_across_runs(
-                    df, across_run_confidence_threshold
-                )
-            )
-            .reset_index(drop=True)
-        )
+    #     # Group by alignment_group_id and apply function in parallel
+    #     data_with_confidence = (
+    #         prop_data.groupby("alignment_group_id", group_keys=False)
+    #         .apply(
+    #             lambda df: transfer_confident_evidence_across_runs(
+    #                 df, across_run_confidence_threshold
+    #             )
+    #         )
+    #         .reset_index(drop=True)
+    #     )
 
-        logger.info(
-            f"Propagating signal for {len(prop_data['feature_id'].unique())} aligned features of total {len(data['feature_id'].unique())} features across runs ..."
-        )
+    #     logger.info(
+    #         f"Propagating signal for {len(prop_data['feature_id'].unique())} aligned features of total {len(data['feature_id'].unique())} features across runs ..."
+    #     )
 
-        ## Concat non prop data with prop data
-        data = pd.concat([non_prop_data, data_with_confidence], ignore_index=True)
+    #     ## Concat non prop data with prop data
+    #     data = pd.concat([non_prop_data, data_with_confidence], ignore_index=True)
 
     # peptide_id = -1 indicates h0, i.e. the peak group is wrong!
     # initialize priors
@@ -452,11 +450,7 @@ def precursor_inference(
 
 
 def peptidoform_inference(
-    transition_table,
-    precursor_data,
-    ipf_grouped_fdr,
-    propagate_signal_across_runs,
-    across_run_confidence_threshold,
+    transition_table, precursor_data, ipf_grouped_fdr, propagate_signal_across_runs
 ):
     """
     Conducts peptidoform-level inference.
@@ -476,7 +470,7 @@ def peptidoform_inference(
     # compute transition posterior probabilities
     logger.info("Preparing peptidoform-level data ... ")
     transition_data_bm = prepare_transition_bm(
-        transition_table, propagate_signal_across_runs, across_run_confidence_threshold
+        transition_table, propagate_signal_across_runs
     )
 
     # compute posterior peptidoform probability
@@ -896,13 +890,17 @@ def infer_peptidoforms(config: IPFIOConfig):
 
         peptide_ids_batch = peptidoform_group_batch_mapping["peptide_id"].unique()
 
-        # peptidoform level
-        peptidoform_table = reader.read(
-            level="transition", peptide_ids=peptide_ids_batch
-        )
-
         ## prepare for propagating signal across runs for aligned features
         if config.propagate_signal_across_runs:
+            ipf_max_transition_pep = config.ipf_max_transition_pep
+            # We import all the transition evidence to propagate to potentially rescue aligned transitions that would be removed.
+            reader.config.ipf_max_transition_pep = 1
+
+            # peptidoform level
+            peptidoform_table = reader.read(
+                level="transition", peptide_ids=peptide_ids_batch
+            )
+
             across_run_feature_map = reader.read(level="alignment")
 
             peptidoform_table = peptidoform_table.merge(
@@ -921,12 +919,54 @@ def infer_peptidoforms(config: IPFIOConfig):
                 {"alignment_group_id": "int64"}
             )
 
+            ## Separate out features that need propagation and those that don't to avoid calling apply on the features that don't need propagated peps
+            non_prop_data = peptidoform_table.loc[
+                peptidoform_table["feature_id"]
+                == peptidoform_table["alignment_group_id"]
+            ]
+            prop_data = peptidoform_table.loc[
+                peptidoform_table["feature_id"]
+                != peptidoform_table["alignment_group_id"]
+            ]
+
+            # Group by alignment_group_id and apply function in parallel
+            data_with_confidence = (
+                prop_data.groupby("alignment_group_id", group_keys=False)
+                .apply(
+                    lambda df: transfer_confident_evidence_across_runs(
+                        df,
+                        config.across_run_confidence_threshold,
+                        value_cols=["pep"],
+                    )
+                )
+                .reset_index(drop=True)
+            )
+
+            logger.info(
+                f"Propagating signal for {len(prop_data['feature_id'].unique())} aligned features of total {len(peptidoform_table['feature_id'].unique())} features across runs ..."
+            )
+
+            ## Concat non prop data with prop data
+            peptidoform_table = pd.concat(
+                [non_prop_data, data_with_confidence], ignore_index=True
+            )
+            peptidoform_table = peptidoform_table.loc[
+                peptidoform_table["pep"] <= ipf_max_transition_pep
+            ]
+
+            # Reset
+            reader.config.ipf_max_transition_pep = ipf_max_transition_pep
+        else:
+            # peptidoform level
+            peptidoform_table = reader.read(
+                level="transition", peptide_ids=peptide_ids_batch
+            )
+
         peptidoform_data = peptidoform_inference(
             peptidoform_table,
             precursor_data,
             config.ipf_grouped_fdr,
             config.propagate_signal_across_runs,
-            config.across_run_confidence_threshold,
         )
         if config.generate_report:
             plot_peptidoform_inference(
