@@ -1081,15 +1081,6 @@ def pre_propagate_evidence(config: IPFIOConfig):
         ;
         """)
 
-    # # ── helper to chunk an iterable ────────────────────────────────
-    # def chunked(iterable, size):
-    #     it = iter(iterable)
-    #     while True:
-    #         batch = list(islice(it, size))
-    #         if not batch:
-    #             return
-    #         yield batch
-
     # 5.1) make sure we have a table to remember which groups ran
     con.execute("""
     CREATE TABLE IF NOT EXISTS processed_groups (
