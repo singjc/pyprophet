@@ -115,7 +115,7 @@ infer_peptidoforms_bayenet = None
 )
 @click.option(
     "--generate_report/--no-generate_report",
-    default=True,
+    default=False,
     show_default=True,
     help="Generate a report of the inference process.",
 )

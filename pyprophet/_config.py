@@ -477,7 +477,7 @@ class IPFIOConfig(BaseIOConfig):
     ipf_max_alignment_pep: float = 0.7
     across_run_confidence_threshold: float = 0.5
     batch_size: int = 100_000
-    generate_report: bool = True  # Generate a report PDF with IPF results
+    generate_report: bool = False  # Generate a report PDF with IPF results
 
     # Pre-propagation of evidence duckdb
     re_create_tables: bool = False
