@@ -17,7 +17,6 @@ from loguru import logger
 from matplotlib.backends.backend_pdf import PdfPages
 
 from ..report import PlotGenerator
-from ..io._base import BaseOSWWriter
 
 
 def export_tsv_report(
