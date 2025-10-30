@@ -563,7 +563,8 @@ def test_tsv_report_basic(test_data_osw, temp_folder, regtest):
     cmd = f"pyprophet score --in={test_data_osw} --level=ms2 --test --pi0_lambda=0.001 0 0 --ss_iteration_fdr=0.02 && "
     cmd += f"pyprophet infer peptide --pi0_lambda=0.001 0 0 --in={test_data_osw} --context=global && "
     cmd += f"pyprophet infer protein --pi0_lambda=0 0 0 --in={test_data_osw} --context=global && "
-    cmd += f"pyprophet export tsv --in={test_data_osw} --out={temp_folder}/test_data.tsv --format=legacy_merged && "
+    # Use relaxed filtering thresholds to ensure we get data in the export
+    cmd += f"pyprophet export tsv --in={test_data_osw} --out={temp_folder}/test_data.tsv --format=legacy_merged --max_rs_peakgroup_qvalue=1.0 --max_global_peptide_qvalue=1.0 --max_global_protein_qvalue=1.0 && "
     # Now generate report from TSV
     cmd += f"pyprophet export tsv-report --in={temp_folder}/test_data.tsv --out={temp_folder}/test_report.pdf"
 
@@ -583,7 +584,8 @@ def test_tsv_report_with_options(test_data_osw, temp_folder, regtest):
     cmd = f"pyprophet score --in={test_data_osw} --level=ms2 --test --pi0_lambda=0.001 0 0 --ss_iteration_fdr=0.02 && "
     cmd += f"pyprophet infer peptide --pi0_lambda=0.001 0 0 --in={test_data_osw} --context=global && "
     cmd += f"pyprophet infer protein --pi0_lambda=0 0 0 --in={test_data_osw} --context=global && "
-    cmd += f"pyprophet export tsv --in={test_data_osw} --out={temp_folder}/test_data.tsv --format=legacy_merged && "
+    # Use relaxed filtering thresholds to ensure we get data in the export
+    cmd += f"pyprophet export tsv --in={test_data_osw} --out={temp_folder}/test_data.tsv --format=legacy_merged --max_rs_peakgroup_qvalue=1.0 --max_global_peptide_qvalue=1.0 --max_global_protein_qvalue=1.0 && "
     # Now generate report from TSV with custom options
     cmd += f"pyprophet export tsv-report --in={temp_folder}/test_data.tsv --out={temp_folder}/test_report_custom.pdf --top_n=5 --no-consistent_top --color_palette=protan"
 

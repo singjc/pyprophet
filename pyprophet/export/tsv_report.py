@@ -73,6 +73,10 @@ def export_tsv_report(
 
     logger.info(f"Loaded {len(df)} rows with {len(df.columns)} columns")
 
+    # Warn if there's no data but proceed with report generation
+    if len(df) == 0:
+        logger.warning("Input TSV file has no data rows. Report will only contain summary table.")
+
     # Generate output filename if not provided
     if outfile is None:
         outfile = infile.replace(file_ext, "_report.pdf")
@@ -399,13 +403,18 @@ def _prepare_level_data(
     # Filter out zero/NA intensities
     work_df = work_df[work_df["area_intensity"] > 0].copy()
 
+    # Check if we have any data left after filtering
+    if len(work_df) == 0:
+        logger.warning(f"No data available after filtering for {level} level")
+        return None
+
     if level == "precursor":
         # For precursor level, just ensure we have the right ID
         if "precursor_id" not in work_df.columns:
             logger.warning("No precursor ID column found")
             return None
         # Keep only best peak group per precursor per run if m_score exists
-        if "m_score" in work_df.columns:
+        if "m_score" in work_df.columns and len(work_df) > 0:
             work_df = work_df.loc[
                 work_df.groupby(["filename", "precursor_id"])["m_score"].idxmin()
             ]
@@ -422,25 +431,36 @@ def _prepare_level_data(
                 return None
 
         # Keep only best peak group per precursor per run if m_score exists
-        if "precursor_id" in work_df.columns and "m_score" in work_df.columns:
+        if "precursor_id" in work_df.columns and "m_score" in work_df.columns and len(work_df) > 0:
             work_df = work_df.loc[
                 work_df.groupby(["filename", "precursor_id"])["m_score"].idxmin()
             ]
 
+        # Check again if we have data after filtering
+        if len(work_df) == 0:
+            logger.warning("No data available after precursor filtering for peptide level")
+            return None
+
         # Select top precursors for each peptide
-        if consistent_top and "precursor_id" in work_df.columns:
+        if consistent_top and "precursor_id" in work_df.columns and len(work_df) > 0:
             # Use precursors with highest median intensity across all runs
             median_intensity = (
                 work_df.groupby(["precursor_id", "peptide_id"])["area_intensity"]
                 .median()
                 .reset_index()
             )
-            top_precursors = (
-                median_intensity.groupby("peptide_id")
-                .apply(lambda x: x.nlargest(top_n, "area_intensity")["precursor_id"])
-                .reset_index()["precursor_id"]
-            )
-            work_df = work_df[work_df["precursor_id"].isin(top_precursors)]
+            if len(median_intensity) > 0:
+                top_precursors = (
+                    median_intensity.groupby("peptide_id")
+                    .apply(lambda x: x.nlargest(top_n, "area_intensity")["precursor_id"])
+                    .reset_index()["precursor_id"]
+                )
+                work_df = work_df[work_df["precursor_id"].isin(top_precursors)]
+
+        # Final check before aggregation
+        if len(work_df) == 0:
+            logger.warning("No data available after top precursor selection for peptide level")
+            return None
 
         # Aggregate to peptide level (mean of top precursors)
         agg_df = (
@@ -474,26 +494,37 @@ def _prepare_level_data(
             prot_map.reset_index(), on="peptide_id", how="left"
         )
 
+        # Check if we have any data after merging
+        if len(peptide_df) == 0:
+            logger.warning("No data available after merging peptide and protein mappings")
+            return None
+
         # Handle protein groups - explode if needed
         # (For simplicity, we'll just use the first protein in groups)
         if peptide_df["protein_id"].dtype == object:
             # Split protein groups
             peptide_df["protein_id"] = peptide_df["protein_id"].str.split(";").str[0]
 
-        if consistent_top:
+        if consistent_top and len(peptide_df) > 0:
             # Calculate median intensity for each peptide
             peptide_df["median_intensity"] = peptide_df.groupby("peptide_id")[
                 "area_intensity"
             ].transform("median")
 
             # Get top N peptides per protein
-            top_peptides = (
-                peptide_df.groupby("protein_id")
-                .apply(lambda x: x.nlargest(top_n, "median_intensity")["peptide_id"])
-                .reset_index()["peptide_id"]
-            )
-            peptide_df = peptide_df[peptide_df["peptide_id"].isin(top_peptides)]
-            peptide_df = peptide_df.drop(columns=["median_intensity"])
+            if len(peptide_df) > 0:
+                top_peptides = (
+                    peptide_df.groupby("protein_id")
+                    .apply(lambda x: x.nlargest(top_n, "median_intensity")["peptide_id"])
+                    .reset_index()["peptide_id"]
+                )
+                peptide_df = peptide_df[peptide_df["peptide_id"].isin(top_peptides)]
+                peptide_df = peptide_df.drop(columns=["median_intensity"])
+
+        # Final check before aggregation
+        if len(peptide_df) == 0:
+            logger.warning("No data available for protein level aggregation")
+            return None
 
         # Aggregate to protein level (mean of top peptides)
         agg_df = (
