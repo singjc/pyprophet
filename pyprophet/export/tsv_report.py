@@ -313,33 +313,27 @@ def _plot_level(
     title = f"{level.capitalize()} Level Quantification"
 
     # First set of plots: ID barplot, ID consistency, violin plot, CV distribution
-    try:
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-        fig.suptitle(title, fontsize=14)
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle(title, fontsize=14)
 
-        plotter.add_id_barplot(axes[0, 0], plot_df, id_key)
-        plotter.plot_identification_consistency(axes[0, 1], plot_df, id_key)
-        plotter.add_violinplot(axes[1, 0], plot_df, id_key)
-        plotter.plot_cv_distribution(axes[1, 1], plot_df, id_key)
+    plotter.add_id_barplot(axes[0, 0], plot_df, id_key)
+    plotter.plot_identification_consistency(axes[0, 1], plot_df, id_key)
+    plotter.add_violinplot(axes[1, 0], plot_df, id_key)
+    plotter.plot_cv_distribution(axes[1, 1], plot_df, id_key)
 
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
-    except Exception as e:
-        logger.error(f"Failed to generate first set of {level} plots: {str(e)}")
+    plt.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
 
     # Second set of plots: Jaccard similarity and intensity correlation
-    try:
-        fig, axes = plt.subplots(2, 1, figsize=(15, 12))
+    fig, axes = plt.subplots(2, 1, figsize=(15, 12))
 
-        plotter.plot_jaccard_similarity(axes[0], plot_df, id_key)
-        plotter.plot_intensity_correlation(axes[1], plot_df, id_key)
+    plotter.plot_jaccard_similarity(axes[0], plot_df, id_key)
+    plotter.plot_intensity_correlation(axes[1], plot_df, id_key)
 
-        plt.tight_layout()
-        pdf.savefig(fig)
-        plt.close(fig)
-    except Exception as e:
-        logger.error(f"Failed to generate second set of {level} plots: {str(e)}")
+    plt.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 def _prepare_level_data(
