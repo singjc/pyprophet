@@ -14,6 +14,10 @@ import os
 import pandas as pd
 from pathlib import Path
 from loguru import logger
+
+# Set matplotlib backend before importing pyplot or PdfPages
+import matplotlib
+matplotlib.use("Agg")
 from matplotlib.backends.backend_pdf import PdfPages
 
 from ..report import PlotGenerator
