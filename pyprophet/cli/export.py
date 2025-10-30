@@ -51,7 +51,6 @@ def create_export_group():
     export.add_command(export_score_plots, name="score-plots")  # Deprecated
     export.add_command(export_scored_report, name="score-report")
     export.add_command(export_tsv_report, name="tsv-report")
-    export.add_command(export_feature_scores, name="feature-scores")
     export.add_command(export_calibration_report, name="calibration-report")
 
     return export
