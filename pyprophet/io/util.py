@@ -480,9 +480,11 @@ def compute_adjusted_pep_and_rerank(data: "pd.DataFrame") -> "pd.DataFrame":
     
     This function implements the alignment-adjusted posterior error probability calculation:
     1. For reference features (where feature is the alignment reference), set alignment_pep = 1.0
-    2. For all features, compute pep_adj = 1 - (1 - pep_ms2) * (1 - alignment_pep)
-    3. Re-rank peak groups within each (run_id, transition_group_id) by pep_adj
-    4. Compute model-based FDR (qvalues) using compute_model_fdr on top-1 pep_adj per group
+       and skip combining (use pep_ms2 directly as pep_adj)
+    2. For aligned features with alignment evidence, compute pep_adj = 1 - (1 - pep_ms2) * (1 - alignment_pep)
+    3. For features without alignment evidence, use pep_ms2 as pep_adj
+    4. Re-rank peak groups within each (run_id, transition_group_id) by pep_adj
+    5. Compute model-based FDR (qvalues) using compute_model_fdr on top-1 pep_adj per group
     
     The function preserves original columns by renaming:
     - m_score -> ms2_m_score (original qvalues from MS2 scoring)
@@ -523,23 +525,15 @@ def compute_adjusted_pep_and_rerank(data: "pd.DataFrame") -> "pd.DataFrame":
     if "peak_group_rank" in data.columns:
         data.rename(columns={"peak_group_rank": "ms2_peak_group_rank"}, inplace=True)
     
-    # Step 1: For reference features, set alignment_pep = 1.0 (neutral)
-    # Reference features are those where id == alignment_reference_feature_id for some aligned feature
-    # OR where alignment_reference_feature_id is null but alignment_group_id is present
-    # (meaning this is a reference feature itself)
+    # Step 1: Identify reference features
+    # Reference features are those where id appears in alignment_reference_feature_id
+    is_reference = pd.Series(False, index=data.index)
     if "alignment_reference_feature_id" in data.columns:
-        # Find features that are references (their ID appears in alignment_reference_feature_id)
         reference_ids = data[data["alignment_reference_feature_id"].notna()]["alignment_reference_feature_id"].unique()
         is_reference = data["id"].isin(reference_ids)
-        
-        # For reference features, if they don't have alignment_pep yet, set it to 1.0
-        data.loc[is_reference & data["alignment_pep"].isna(), "alignment_pep"] = 1.0
-        
-        logger.debug(f"Set alignment_pep=1.0 for {is_reference.sum()} reference features")
+        logger.debug(f"Identified {is_reference.sum()} reference features")
     
     # Step 2: Compute adjusted PEP
-    # pep_adj = 1 - (1 - pep_ms2) * (1 - pep_align)
-    # Handle missing alignment_pep by treating it as 1.0 (neutral, no alignment evidence)
     pep_ms2 = data["pep"].fillna(1.0)
     pep_align = data["alignment_pep"].fillna(1.0)
     
@@ -549,9 +543,20 @@ def compute_adjusted_pep_and_rerank(data: "pd.DataFrame") -> "pd.DataFrame":
     pep_align = np.clip(pep_align, eps, 1.0 - eps)
     
     # Compute adjusted PEP
-    pep_adj = 1.0 - (1.0 - pep_ms2) * (1.0 - pep_align)
-    pep_adj = np.clip(pep_adj, eps, 1.0 - eps)
+    # For reference features: use pep_ms2 only (no alignment evidence for themselves)
+    # For aligned features with alignment_pep < 1: combine MS2 and alignment evidence
+    # For features without alignment: use pep_ms2 only
+    pep_adj = pep_ms2.copy()
     
+    # Only apply combination where we have actual alignment evidence (alignment_pep < 1.0 and not a reference)
+    has_alignment_evidence = (data["alignment_pep"].notna()) & (data["alignment_pep"] < 1.0) & (~is_reference)
+    
+    if has_alignment_evidence.any():
+        # Combine MS2 and alignment evidence for aligned features
+        pep_adj.loc[has_alignment_evidence] = 1.0 - (1.0 - pep_ms2.loc[has_alignment_evidence]) * (1.0 - pep_align.loc[has_alignment_evidence])
+        logger.info(f"Combined MS2 and alignment evidence for {has_alignment_evidence.sum()} aligned features")
+    
+    pep_adj = np.clip(pep_adj, eps, 1.0 - eps)
     data["ms2_aligned_adj_pep"] = pep_adj
     
     logger.info("Computed adjusted PEP from MS2 and alignment evidence")
