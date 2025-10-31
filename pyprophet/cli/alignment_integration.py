@@ -5,7 +5,9 @@ This module implements the alignment-integration subcommand that computes
 adjusted PEPs and q-values by combining MS2 scores with alignment scores.
 """
 
+import glob
 import os
+import shutil
 import sqlite3
 import click
 import pandas as pd
@@ -86,7 +88,6 @@ def _process_osw(infile, outfile, max_alignment_pep):
     
     # Copy file if output is different
     if infile != outfile:
-        import shutil
         logger.info(f"Copying {infile} to {outfile}")
         shutil.copy2(infile, outfile)
     
@@ -227,7 +228,6 @@ def _process_split_parquet(infile, outfile, max_alignment_pep):
         return
     
     # Get list of precursor files
-    import glob
     precursor_files = glob.glob(os.path.join(infile, "*.oswpq", "precursors_features.parquet"))
     
     if not precursor_files:
