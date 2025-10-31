@@ -144,7 +144,13 @@ class OSWReader(BaseOSWReader):
             data = self._read_standard_data(con, cfg)
 
         # Apply common augmentations to all scored data types
-        return self._augment_data(data, con, cfg)
+        data = self._augment_data(data, con, cfg)
+        
+        # Apply alignment-adjusted PEP calculation and re-ranking if alignment data is present
+        from ..util import compute_adjusted_pep_and_rerank
+        data = compute_adjusted_pep_and_rerank(data)
+        
+        return data
 
     def _is_unscored_file(self, con):
         """Check if the file is unscored (no score tables present)."""

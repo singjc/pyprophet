@@ -472,3 +472,124 @@ def unimod_to_codename(seq):
     seq_poms = poms.AASequence.fromString(seq)
     codename = seq_poms.toString()
     return codename
+
+
+def compute_adjusted_pep_and_rerank(data: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Compute adjusted PEP from MS2 PEP and alignment PEP, then re-rank peak groups.
+    
+    This function implements the alignment-adjusted posterior error probability calculation:
+    1. For reference features (where feature is the alignment reference), set alignment_pep = 1.0
+    2. For all features, compute pep_adj = 1 - (1 - pep_ms2) * (1 - alignment_pep)
+    3. Re-rank peak groups within each (run_id, transition_group_id) by pep_adj
+    4. Compute model-based FDR (qvalues) using compute_model_fdr on top-1 pep_adj per group
+    
+    The function preserves original columns by renaming:
+    - m_score -> ms2_m_score (original qvalues from MS2 scoring)
+    - peak_group_rank -> ms2_peak_group_rank (original ranking)
+    
+    And adds new columns:
+    - ms2_aligned_adj_pep: The adjusted PEP combining MS2 and alignment evidence
+    - m_score: New qvalues computed from adjusted PEPs (model-based FDR)
+    - peak_group_rank: New ranking based on adjusted PEPs
+    
+    Args:
+        data: DataFrame with columns: pep, alignment_pep (optional), alignment_reference_feature_id (optional),
+              id, run_id, transition_group_id, m_score, peak_group_rank
+              
+    Returns:
+        DataFrame with adjusted PEP, new rankings, and new qvalues
+    """
+    import pandas as pd
+    import numpy as np
+    from loguru import logger
+    
+    # Import compute_model_fdr from ipf module
+    from ..ipf import compute_model_fdr
+    
+    # Check if we have alignment data
+    has_alignment = "alignment_pep" in data.columns
+    
+    if not has_alignment:
+        logger.debug("No alignment data present, skipping PEP adjustment")
+        return data
+    
+    # Make a copy to avoid modifying the original
+    data = data.copy()
+    
+    # Rename original columns to preserve them
+    if "m_score" in data.columns:
+        data.rename(columns={"m_score": "ms2_m_score"}, inplace=True)
+    if "peak_group_rank" in data.columns:
+        data.rename(columns={"peak_group_rank": "ms2_peak_group_rank"}, inplace=True)
+    
+    # Step 1: For reference features, set alignment_pep = 1.0 (neutral)
+    # Reference features are those where id == alignment_reference_feature_id for some aligned feature
+    # OR where alignment_reference_feature_id is null but alignment_group_id is present
+    # (meaning this is a reference feature itself)
+    if "alignment_reference_feature_id" in data.columns:
+        # Find features that are references (their ID appears in alignment_reference_feature_id)
+        reference_ids = data[data["alignment_reference_feature_id"].notna()]["alignment_reference_feature_id"].unique()
+        is_reference = data["id"].isin(reference_ids)
+        
+        # For reference features, if they don't have alignment_pep yet, set it to 1.0
+        data.loc[is_reference & data["alignment_pep"].isna(), "alignment_pep"] = 1.0
+        
+        logger.debug(f"Set alignment_pep=1.0 for {is_reference.sum()} reference features")
+    
+    # Step 2: Compute adjusted PEP
+    # pep_adj = 1 - (1 - pep_ms2) * (1 - pep_align)
+    # Handle missing alignment_pep by treating it as 1.0 (neutral, no alignment evidence)
+    pep_ms2 = data["pep"].fillna(1.0)
+    pep_align = data["alignment_pep"].fillna(1.0)
+    
+    # Clip to avoid numerical issues (small epsilon to prevent 0 or 1 exactly)
+    eps = 1e-10
+    pep_ms2 = np.clip(pep_ms2, eps, 1.0 - eps)
+    pep_align = np.clip(pep_align, eps, 1.0 - eps)
+    
+    # Compute adjusted PEP
+    pep_adj = 1.0 - (1.0 - pep_ms2) * (1.0 - pep_align)
+    pep_adj = np.clip(pep_adj, eps, 1.0 - eps)
+    
+    data["ms2_aligned_adj_pep"] = pep_adj
+    
+    logger.info("Computed adjusted PEP from MS2 and alignment evidence")
+    
+    # Step 3: Re-rank within each (run_id, transition_group_id) by pep_adj
+    # Lower pep_adj is better, so rank ascending
+    # Use min method to handle ties (same rank for equal pep_adj)
+    data["peak_group_rank"] = (
+        data.groupby(["run_id", "transition_group_id"])["ms2_aligned_adj_pep"]
+        .rank(method="min", ascending=True)
+        .astype(int)
+    )
+    
+    logger.info("Re-ranked peak groups based on adjusted PEP")
+    
+    # Step 4: Compute model-based FDR (qvalues) from top-1 pep_adj per group
+    # Get top-1 features (rank == 1) per (run_id, transition_group_id)
+    top1_mask = data["peak_group_rank"] == 1
+    top1_data = data[top1_mask].copy()
+    
+    if len(top1_data) > 0:
+        # Compute qvalues using compute_model_fdr on top-1 pep_adj
+        top1_qvalues = compute_model_fdr(top1_data["ms2_aligned_adj_pep"].values)
+        
+        # Create a mapping from (run_id, transition_group_id) to qvalue
+        top1_data["m_score"] = top1_qvalues
+        qvalue_map = top1_data.set_index(["run_id", "transition_group_id"])["m_score"].to_dict()
+        
+        # Assign qvalues to all rows based on their group
+        data["m_score"] = data.apply(
+            lambda row: qvalue_map.get((row["run_id"], row["transition_group_id"]), np.nan),
+            axis=1
+        )
+        
+        logger.info(f"Computed model-based FDR (qvalues) for {len(top1_data)} top-ranked features")
+    else:
+        # No top-1 features, set m_score to NaN
+        data["m_score"] = np.nan
+        logger.warning("No top-1 features found, m_score set to NaN")
+    
+    return data
