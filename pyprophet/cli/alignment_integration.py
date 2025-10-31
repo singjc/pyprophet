@@ -339,15 +339,14 @@ def _compute_adjusted_scores(ms2_scores, alignment_scores):
     top1_features = target_df[target_df["alignment_ms2_peak_group_rank"] == 1].copy()
     
     # Compute q-values using model-based FDR
+    # According to the workflow, we compute q-values on the top-1 vector
     logger.info(f"Computing q-values for {len(top1_features)} top-1 features...")
-    top1_features["alignment_ms2_q_value"] = compute_model_fdr(top1_features["alignment_ms2_pep"].values)
+    top1_qvalues = compute_model_fdr(top1_features["alignment_ms2_pep"].values)
+    top1_features["alignment_ms2_q_value"] = top1_qvalues
     
-    # Create a mapping of feature_id to q-value for top-1 features
-    qvalue_map = dict(zip(top1_features["feature_id"], top1_features["alignment_ms2_q_value"]))
-    
-    # For non-top-1 features, assign q-value based on their group's top-1 feature
-    # This ensures all features in a group share the same q-value (optional - can be modified)
-    # For now, we'll compute q-values for all features based on their adjusted PEP
+    # However, for practical purposes, we also want q-values for all features
+    # Compute q-values for all target features based on their adjusted PEP
+    logger.info(f"Computing q-values for all {len(target_df)} target features...")
     target_df["alignment_ms2_q_value"] = compute_model_fdr(target_df["alignment_ms2_pep"].values)
     
     # Merge back to include decoys
