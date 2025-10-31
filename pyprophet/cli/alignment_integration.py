@@ -18,6 +18,10 @@ from ..io.util import check_sqlite_table
 from .util import AdvancedHelpCommand, measure_memory_usage_and_time
 
 
+# Epsilon value to avoid numerical issues when clipping PEPs
+EPSILON = 1e-10
+
+
 @click.command(name="alignment-integration", cls=AdvancedHelpCommand)
 @click.option(
     "--in",
@@ -237,8 +241,10 @@ def _process_split_parquet(infile, outfile, max_alignment_pep):
     alignment_df = pd.read_parquet(alignment_file)
     
     # Filter alignment scores
+    # Note: In parquet alignment files, DECOY column comes from LABEL in SQLite
+    # where LABEL=1 (DECOY=1 in parquet) means target, not decoy
     alignment_scores = alignment_df[
-        (alignment_df["DECOY"] == 1) & 
+        (alignment_df["DECOY"] == 1) &  # Target features (LABEL=1 from SQLite)
         (alignment_df["PEP"] < max_alignment_pep)
     ][["FEATURE_ID", "REFERENCE_FEATURE_ID", "PEP"]].copy()
     alignment_scores.columns = ["feature_id", "reference_feature_id", "alignment_pep"]
@@ -321,9 +327,8 @@ def _compute_adjusted_scores(ms2_scores, alignment_scores):
     df["alignment_pep"] = df["alignment_pep"].fillna(1.0)
     
     # Clip PEPs to avoid numerical issues
-    epsilon = 1e-10
-    df["ms2_pep"] = df["ms2_pep"].clip(epsilon, 1 - epsilon)
-    df["alignment_pep"] = df["alignment_pep"].clip(epsilon, 1 - epsilon)
+    df["ms2_pep"] = df["ms2_pep"].clip(EPSILON, 1 - EPSILON)
+    df["alignment_pep"] = df["alignment_pep"].clip(EPSILON, 1 - EPSILON)
     
     # Compute adjusted PEP: pep_adj = 1 - (1 - pep_ms2) * (1 - pep_align)
     df["alignment_ms2_pep"] = 1 - (1 - df["ms2_pep"]) * (1 - df["alignment_pep"])

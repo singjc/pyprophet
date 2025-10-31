@@ -82,11 +82,7 @@ def test_compute_adjusted_scores_with_no_alignment():
     })
     
     # No alignment scores
-    alignment_scores = pd.DataFrame({
-        "feature_id": [],
-        "reference_feature_id": [],
-        "alignment_pep": []
-    })
+    alignment_scores = pd.DataFrame(columns=["feature_id", "reference_feature_id", "alignment_pep"])
     
     result = _compute_adjusted_scores(ms2_scores, alignment_scores)
     
@@ -110,11 +106,7 @@ def test_compute_adjusted_scores_with_decoys():
         "ms2_rank": [1, 2, 1, 2]
     })
     
-    alignment_scores = pd.DataFrame({
-        "feature_id": [],
-        "reference_feature_id": [],
-        "alignment_pep": []
-    })
+    alignment_scores = pd.DataFrame(columns=["feature_id", "reference_feature_id", "alignment_pep"])
     
     result = _compute_adjusted_scores(ms2_scores, alignment_scores)
     
