@@ -130,15 +130,27 @@ def _process_osw(infile, outfile, max_alignment_pep):
     
     # Fetch alignment scores
     logger.info("Fetching alignment scores...")
+    # Note: A feature can align to multiple references. We select the best (lowest PEP) alignment per feature.
     alignment_query = f"""
         SELECT 
-            FEATURE_MS2_ALIGNMENT.ALIGNED_FEATURE_ID AS feature_id,
-            FEATURE_MS2_ALIGNMENT.REFERENCE_FEATURE_ID AS reference_feature_id,
-            SCORE_ALIGNMENT.PEP AS alignment_pep
-        FROM FEATURE_MS2_ALIGNMENT
-        INNER JOIN SCORE_ALIGNMENT ON SCORE_ALIGNMENT.FEATURE_ID = FEATURE_MS2_ALIGNMENT.ALIGNED_FEATURE_ID
-        WHERE FEATURE_MS2_ALIGNMENT.LABEL = 1
-        AND SCORE_ALIGNMENT.PEP < {max_alignment_pep}
+            ALIGNED_FEATURE_ID AS feature_id,
+            REFERENCE_FEATURE_ID AS reference_feature_id,
+            alignment_pep
+        FROM (
+            SELECT 
+                FEATURE_MS2_ALIGNMENT.ALIGNED_FEATURE_ID,
+                FEATURE_MS2_ALIGNMENT.REFERENCE_FEATURE_ID,
+                SCORE_ALIGNMENT.PEP AS alignment_pep,
+                ROW_NUMBER() OVER (
+                    PARTITION BY FEATURE_MS2_ALIGNMENT.ALIGNED_FEATURE_ID 
+                    ORDER BY SCORE_ALIGNMENT.PEP ASC
+                ) AS rn
+            FROM FEATURE_MS2_ALIGNMENT
+            INNER JOIN SCORE_ALIGNMENT ON SCORE_ALIGNMENT.FEATURE_ID = FEATURE_MS2_ALIGNMENT.ALIGNED_FEATURE_ID
+            WHERE FEATURE_MS2_ALIGNMENT.LABEL = 1
+            AND SCORE_ALIGNMENT.PEP < {max_alignment_pep}
+        )
+        WHERE rn = 1
     """
     alignment_scores = pd.read_sql_query(alignment_query, con)
     logger.info(f"Loaded {len(alignment_scores)} alignment scores passing PEP < {max_alignment_pep}")
@@ -185,11 +197,16 @@ def _process_parquet(infile, outfile, max_alignment_pep):
     ms2_scores.columns = ["feature_id", "run_id", "precursor_id", "decoy", "ms2_pep", "ms2_qvalue", "ms2_rank"]
     
     # Filter alignment scores
+    # Note: In parquet alignment files, DECOY column comes from LABEL in SQLite
+    # where LABEL=1 (DECOY=1 in parquet) means target, not decoy
     alignment_scores = alignment_df[
-        (alignment_df["DECOY"] == 1) & 
+        (alignment_df["DECOY"] == 1) &  # Target features (LABEL=1 from SQLite)
         (alignment_df["PEP"] < max_alignment_pep)
     ][["FEATURE_ID", "REFERENCE_FEATURE_ID", "PEP"]].copy()
     alignment_scores.columns = ["feature_id", "reference_feature_id", "alignment_pep"]
+    
+    # Deduplicate: keep only the best (lowest PEP) alignment per feature
+    alignment_scores = alignment_scores.sort_values("alignment_pep").groupby("feature_id").first().reset_index()
     
     logger.info(f"Loaded {len(alignment_scores)} alignment scores passing PEP < {max_alignment_pep}")
     
@@ -248,6 +265,9 @@ def _process_split_parquet(infile, outfile, max_alignment_pep):
         (alignment_df["PEP"] < max_alignment_pep)
     ][["FEATURE_ID", "REFERENCE_FEATURE_ID", "PEP"]].copy()
     alignment_scores.columns = ["feature_id", "reference_feature_id", "alignment_pep"]
+    
+    # Deduplicate: keep only the best (lowest PEP) alignment per feature
+    alignment_scores = alignment_scores.sort_values("alignment_pep").groupby("feature_id").first().reset_index()
     
     logger.info(f"Loaded {len(alignment_scores)} alignment scores passing PEP < {max_alignment_pep}")
     
