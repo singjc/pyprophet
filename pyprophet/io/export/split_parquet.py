@@ -99,7 +99,13 @@ class SplitParquetReader(BaseSplitParquetReader):
                 logger.info("Reading standard OpenSWATH data from split Parquet files.")
                 data = self._read_standard_data(con)
 
-                return self._augment_data(data, con)
+            data = self._augment_data(data, con)
+            
+            # Apply alignment-adjusted PEP calculation and re-ranking if alignment data is present
+            from ..util import compute_adjusted_pep_and_rerank
+            data = compute_adjusted_pep_and_rerank(data)
+            
+            return data
         finally:
             con.close()
 
