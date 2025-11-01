@@ -18,6 +18,7 @@ from ..export.export_report import (
     export_feature_scores as _export_feature_scores,
 )
 from ..export.calibration_report import generate_report as generate_calibration_report
+from ..export.tsv_report import export_tsv_report as _export_tsv_report
 from ..glyco.export import (
     export_score_plots as export_glyco_score_plots,
 )
@@ -49,7 +50,7 @@ def create_export_group():
     export.add_command(export_feature_scores, name="feature-scores")
     export.add_command(export_score_plots, name="score-plots")  # Deprecated
     export.add_command(export_scored_report, name="score-report")
-    export.add_command(export_feature_scores, name="feature-scores")
+    export.add_command(export_tsv_report, name="tsv-report")
     export.add_command(export_calibration_report, name="calibration-report")
 
     return export
@@ -1062,4 +1063,70 @@ def export_calibration_report(
         report_file=report_file,
         zoom_in_xic=zoom_in_xic,
         verbose=int(verbose),
+    )
+
+
+# Export TSV Report
+@click.command(name="tsv-report", cls=AdvancedHelpCommand)
+@click.option(
+    "--in",
+    "infile",
+    required=True,
+    type=click.Path(exists=True),
+    help="Input TSV/CSV file from pyprophet export tsv.",
+)
+@click.option(
+    "--out",
+    "outfile",
+    type=click.Path(exists=False),
+    help="Output PDF report file. If not provided, will be auto-generated based on input filename.",
+)
+@click.option(
+    "--top_n",
+    default=3,
+    show_default=True,
+    type=int,
+    help="Number of top features to use for peptide/protein summarization.",
+)
+@click.option(
+    "--consistent_top/--no-consistent_top",
+    "consistent_top",
+    default=True,
+    show_default=True,
+    help="Whether to use same top features across all runs for summarization.",
+)
+@click.option(
+    "--color_palette",
+    default="normal",
+    show_default=True,
+    type=click.Choice(["normal", "protan", "deutran", "tritan"]),
+    help="Color palette for plots (color-blind friendly options available).",
+)
+@measure_memory_usage_and_time
+def export_tsv_report(infile, outfile, top_n, consistent_top, color_palette):
+    """
+    Generate a simplified report from TSV/CSV export files.
+    
+    This command creates a PDF report with quantification plots from the output
+    of 'pyprophet export tsv'. The report includes:
+    
+    - Identification counts (precursor, peptide, protein levels)
+    
+    - Quantification violin/box plots
+    
+    - CV distribution plots
+    
+    - Intensity correlation heatmaps
+    
+    - Jaccard similarity heatmaps
+    
+    The command automatically summarizes data at peptide and protein levels
+    using the same top-N approach as 'pyprophet export matrix'.
+    """
+    _export_tsv_report(
+        infile=infile,
+        outfile=outfile,
+        top_n=top_n,
+        consistent_top=consistent_top,
+        color_palette=color_palette,
     )

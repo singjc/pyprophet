@@ -179,6 +179,23 @@ To export a PDF report of the results, you can use the :program:`export score-re
    :prog: pyprophet export score-report
    :nested: none
 
+Export TSV Report
+^^^^^^^^^^^^^^^^^
+
+To generate a simplified PDF report from TSV/CSV export files (output from :program:`pyprophet export tsv`), you can use the :program:`export tsv-report` subcommand. This command creates a report with:
+
+- Identification counts (precursor, peptide, protein levels)
+- Quantification violin/box plots
+- CV distribution plots
+- Intensity correlation heatmaps
+- Jaccard similarity heatmaps
+
+The command automatically summarizes data at peptide and protein levels using the same top-N approach as :program:`pyprophet export matrix`.
+
+.. click:: pyprophet.cli.export:export_tsv_report
+   :prog: pyprophet export tsv-report
+   :nested: none
+
 
 Merge files
 -----------
