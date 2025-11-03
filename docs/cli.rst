@@ -180,6 +180,33 @@ To export a PDF report of the results, you can use the :program:`export score-re
    :nested: none
 
 
+Alignment Integration
+---------------------
+.. _cli_alignment_integration:
+
+PyProphet provides the :program:`alignment-integration` subcommand to integrate alignment results with MS2 scores, computing adjusted posterior error probabilities (PEPs) and q-values. This is useful when you have alignment data from multi-run experiments and want to leverage alignment information to improve scoring.
+
+The alignment integration process:
+
+1. **Reads full base MS2 features** (without filtering by q-value threshold)
+2. **Fetches alignment results** from alignment tables/files (FEATURE_MS2_ALIGNMENT and SCORE_ALIGNMENT for OSW, or feature_alignment.parquet for Parquet)
+3. **Computes adjusted PEPs** using the formula: ``pep_adj = 1 - (1 - pep_ms2) × (1 - pep_align)``
+4. **Sets alignment_pep = 1.0** for reference features (those that other features align to), treating them as neutral anchors
+5. **Re-ranks features** within (run_id, precursor) groups based on adjusted PEP
+6. **Computes new q-values** using model-based FDR on the adjusted PEPs
+
+Results are saved back to the input file (or output file if specified):
+
+- **For OSW**: Creates a new ``ALIGNMENT_MS2_SCORE`` table with columns FEATURE_ID, RANK, PEP, QVALUE
+- **For Parquet/Split Parquet**: Adds columns ALIGNMENT_MS2_PEP, ALIGNMENT_MS2_Q_VALUE, ALIGNMENT_MS2_PEAK_GROUP_RANK to precursors_features.parquet
+
+.. currentmodule:: pyprophet.cli.alignment_integration
+
+.. click:: pyprophet.cli.alignment_integration:alignment_integration
+   :prog: pyprophet alignment-integration
+   :nested: none
+
+
 Merge files
 -----------
 

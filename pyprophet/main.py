@@ -87,6 +87,7 @@ import sqlite3
 import click
 import pandas as pd
 
+from .cli.alignment_integration import alignment_integration as alignment_integration_command
 from .cli.export import create_export_group
 from .cli.ipf import (
     glycoform as glycoform_command,
@@ -174,6 +175,9 @@ cli.add_command(exporters, name="export")
 # Merging of OpenSWATH files
 mergers = create_merge_group()
 cli.add_command(mergers, name="merge")
+
+# Alignment integration for computing adjusted PEPs and q-values
+cli.add_command(alignment_integration_command, name="alignment-integration")
 
 
 # Subsample OpenSWATH file to minimum for integrated scoring
