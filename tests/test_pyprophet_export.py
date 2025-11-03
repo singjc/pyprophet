@@ -554,3 +554,46 @@ def test_feature_scores_ms1_ms2_transition(test_data_osw, temp_folder, regtest):
     
     for f in sorted(output_files):
         print(f"  - {f.name}", file=regtest)
+
+
+# ================== TSV REPORT TESTS ==================
+def test_tsv_report_basic(test_data_osw, temp_folder, regtest):
+    """Test generating a report from TSV export file"""
+    # First score and export to TSV
+    cmd = f"pyprophet score --in={test_data_osw} --level=ms2 --test --pi0_lambda=0.001 0 0 --ss_iteration_fdr=0.02 && "
+    cmd += f"pyprophet infer peptide --pi0_lambda=0.001 0 0 --in={test_data_osw} --context=global && "
+    cmd += f"pyprophet infer protein --pi0_lambda=0 0 0 --in={test_data_osw} --context=global && "
+    # Use relaxed filtering thresholds to ensure we get data in the export
+    cmd += f"pyprophet export tsv --in={test_data_osw} --out={temp_folder}/test_data.tsv --format=legacy_merged --max_rs_peakgroup_qvalue=1.0 --max_global_peptide_qvalue=1.0 --max_global_protein_qvalue=1.0 && "
+    # Now generate report from TSV
+    cmd += f"pyprophet export tsv-report --in={temp_folder}/test_data.tsv --out={temp_folder}/test_report.pdf"
+
+    run_pyprophet_command(cmd, temp_folder)
+
+    # Check that output PDF was created
+    report_file = temp_folder / "test_report.pdf"
+    assert report_file.exists(), "Report PDF should be created"
+    assert report_file.stat().st_size > 0, "Report PDF should not be empty"
+
+    print(f"Created report: {report_file.name} ({report_file.stat().st_size} bytes)", file=regtest)
+
+
+def test_tsv_report_with_options(test_data_osw, temp_folder, regtest):
+    """Test generating a report from TSV with custom options"""
+    # First score and export to TSV
+    cmd = f"pyprophet score --in={test_data_osw} --level=ms2 --test --pi0_lambda=0.001 0 0 --ss_iteration_fdr=0.02 && "
+    cmd += f"pyprophet infer peptide --pi0_lambda=0.001 0 0 --in={test_data_osw} --context=global && "
+    cmd += f"pyprophet infer protein --pi0_lambda=0 0 0 --in={test_data_osw} --context=global && "
+    # Use relaxed filtering thresholds to ensure we get data in the export
+    cmd += f"pyprophet export tsv --in={test_data_osw} --out={temp_folder}/test_data.tsv --format=legacy_merged --max_rs_peakgroup_qvalue=1.0 --max_global_peptide_qvalue=1.0 --max_global_protein_qvalue=1.0 && "
+    # Now generate report from TSV with custom options
+    cmd += f"pyprophet export tsv-report --in={temp_folder}/test_data.tsv --out={temp_folder}/test_report_custom.pdf --top_n=5 --no-consistent_top --color_palette=protan"
+
+    run_pyprophet_command(cmd, temp_folder)
+
+    # Check that output PDF was created
+    report_file = temp_folder / "test_report_custom.pdf"
+    assert report_file.exists(), "Report PDF should be created"
+    assert report_file.stat().st_size > 0, "Report PDF should not be empty"
+
+    print(f"Created custom report: {report_file.name} ({report_file.stat().st_size} bytes)", file=regtest)
