@@ -405,6 +405,100 @@ data.loc[mask, "alignment_group_id"] = data.loc[mask, "ref_alignment_group_id"]
 - Identifying the reference feature for each alignment group
 - Analyzing alignment quality across related features
 
+### Alignment-Adjusted PEP Calculation and Re-ranking
+
+After alignment data is integrated during the read phase, PyProphet automatically computes alignment-adjusted posterior error probabilities (PEPs) and re-ranks peak groups. This process combines MS2 and alignment evidence to produce more accurate confidence estimates.
+
+#### Process Overview
+
+1. **Rename Original Columns** (preserve MS2-only results):
+   - `m_score` → `ms2_m_score` (original MS2 qvalues)
+   - `peak_group_rank` → `ms2_peak_group_rank` (original MS2 ranking)
+
+2. **Identify Reference Features**:
+   - Reference features are those whose IDs appear in `alignment_reference_feature_id`
+   - These are the high-quality MS2 features that other runs align to
+
+3. **Compute Adjusted PEP** (`ms2_aligned_adj_pep`):
+   - **For reference features**: Use MS2 PEP unchanged (no alignment evidence for themselves)
+     ```
+     pep_adj = pep_ms2
+     ```
+   - **For aligned features with alignment evidence**: Combine MS2 and alignment PEPs
+     ```
+     pep_adj = 1 - (1 - pep_ms2) × (1 - pep_align)
+     ```
+   - **For features without alignment**: Use MS2 PEP unchanged
+     ```
+     pep_adj = pep_ms2
+     ```
+
+4. **Re-rank Peak Groups**:
+   - Within each `(run_id, transition_group_id)`, rank by `ms2_aligned_adj_pep` (ascending)
+   - Store new ranks in `peak_group_rank`
+
+5. **Compute Model-Based FDR** (new `m_score`):
+   - Select top-1 feature per `(run_id, transition_group_id)` based on new ranking
+   - Apply `compute_model_fdr` to the top-1 `ms2_aligned_adj_pep` values
+   - Propagate resulting qvalues to all features in each group
+
+#### Example
+
+**Reference Feature** (good MS2, serves as alignment anchor):
+```
+id: 5405272318039692409
+pep_ms2: 0.02
+alignment_pep: N/A (reference doesn't align to itself)
+→ ms2_aligned_adj_pep: 0.02 (unchanged)
+```
+
+**Aligned Features** (weak MS2, but good alignment to reference):
+```
+Feature A:
+  pep_ms2: 0.90 (very weak MS2)
+  alignment_pep: 0.06 (good alignment)
+  → ms2_aligned_adj_pep: 1 - (1-0.90)×(1-0.06) = 0.906
+
+Feature B:
+  pep_ms2: 0.92 (very weak MS2)
+  alignment_pep: 0.14 (good alignment)
+  → ms2_aligned_adj_pep: 1 - (1-0.92)×(1-0.14) = 0.931
+```
+
+#### Statistical Interpretation
+
+The formula `pep_adj = 1 - (1 - pep_ms2) × (1 - pep_align)` treats MS2 and alignment as independent sources of evidence:
+- `1 - pep_ms2` = posterior probability the feature is correct (MS2)
+- `1 - pep_align` = posterior probability the feature is correct (alignment)
+- `(1 - pep_ms2) × (1 - pep_align)` = probability BOTH are correct (independence assumption)
+- `pep_adj = 1 - (both correct)` = probability at least one is wrong
+
+**Key Properties:**
+- When MS2 is strong (low PEP), alignment has small effect
+- When MS2 is weak (high PEP), good alignment provides modest improvement
+- Reference features are unbiased (no double-counting of evidence)
+- The combined PEP is conservative and calibrated
+
+#### Output Columns
+
+The export now includes both original and adjusted results:
+
+**Original (MS2-only):**
+- `ms2_m_score`: MS2-based qvalues
+- `ms2_peak_group_rank`: MS2-based ranking
+
+**Adjusted (MS2 + Alignment):**
+- `ms2_aligned_adj_pep`: Combined PEP from MS2 and alignment
+- `m_score`: Model-based qvalues from adjusted PEPs (replaces old `m_score`)
+- `peak_group_rank`: New ranking based on adjusted PEPs (replaces old `peak_group_rank`)
+
+**Alignment Info:**
+- `alignment_pep`: Alignment posterior error probability
+- `alignment_qvalue`: Alignment q-value
+- `alignment_group_id`: Group linking aligned features
+- `alignment_reference_feature_id`: Reference feature ID
+- `from_alignment`: 0 (passed MS2) or 1 (recovered via alignment)
+
 ### Performance Considerations
 
 | Approach | Query Time | Precision | Index Usage |
