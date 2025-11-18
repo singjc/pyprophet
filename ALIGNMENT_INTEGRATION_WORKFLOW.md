@@ -296,6 +296,10 @@ experiment/
 
 ## Configuration Options
 
+### Export with Alignment Recovery
+
+The `export` command can automatically recover peaks with weak MS2 but good alignment:
+
 ```bash
 # Use default (enabled with auto-detection)
 pyprophet export tsv --in data.osw --out results.tsv
@@ -308,6 +312,39 @@ pyprophet export tsv --in data.osw --out results.tsv \
 pyprophet export tsv --in data.osw --out results.tsv \
   --no-use_alignment
 ```
+
+### Alignment Integration Command
+
+The `alignment-integration` command computes adjusted PEPs and q-values by combining MS2 scores with alignment scores:
+
+```bash
+# Process OSW file
+pyprophet alignment-integration --in data.osw
+
+# Process with custom alignment PEP threshold
+pyprophet alignment-integration --in data.osw --max_alignment_pep 0.5
+
+# Process and save to new file
+pyprophet alignment-integration --in data.osw --out data_aligned.osw
+
+# Process Parquet file
+pyprophet alignment-integration --in data.parquet
+
+# Process Split Parquet directory
+pyprophet alignment-integration --in experiment/
+```
+
+This command:
+1. Reads all MS2 scored features (no filtering)
+2. Fetches alignment scores
+3. Computes adjusted PEPs: `pep_adj = 1 - (1 - pep_ms2) × (1 - pep_align)`
+4. Sets reference features' alignment_pep to 1.0 (neutral)
+5. Re-ranks within (run, precursor) groups
+6. Computes new q-values using model-based FDR
+
+Results are saved:
+- **OSW**: New `ALIGNMENT_MS2_SCORE` table
+- **Parquet**: New columns in precursors_features.parquet
 
 ## Output Columns
 
