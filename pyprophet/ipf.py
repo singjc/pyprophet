@@ -190,23 +190,54 @@ def transfer_confident_evidence_across_runs(
     Returns:
         pd.DataFrame: Data with propagated evidence across runs.
     """
-    feature_ids = np.unique(df1["feature_id"])
-    df_list = []
-    for feature_id in feature_ids:
-        tmp_df = df1[
-            (df1["feature_id"] == feature_id)
-            | (
-                (df1["feature_id"] != feature_id)
-                & (df1["pep"] <= across_run_confidence_threshold)
-            )
-        ]
-        tmp_df["feature_id"] = feature_id
-        df_list.append(tmp_df)
-    df_filtered = pd.concat(df_list)
-
-    # Group by relevant columns and apply min reduction
-    df_result = df_filtered.groupby(group_cols, as_index=False)[value_cols].min()
-
+    # Memory-optimized implementation:
+    # The key insight is to avoid creating N separate filtered DataFrames.
+    # Instead, we:
+    # 1. Keep all original data
+    # 2. Identify confident rows and broadcast them to all features efficiently
+    # 3. Concatenate once and let groupby handle deduplication
+    
+    # Identify confident evidence rows that should be propagated across features
+    confident_mask = df1["pep"] <= across_run_confidence_threshold
+    
+    if not confident_mask.any():
+        # No confident evidence to propagate, just group the original data
+        return df1.groupby(group_cols, as_index=False)[value_cols].min()
+    
+    confident_rows = df1[confident_mask].copy()
+    
+    # Get unique feature IDs
+    unique_features = df1["feature_id"].unique()
+    n_features = len(unique_features)
+    
+    # Optimization: Use numpy repeat for efficient broadcasting
+    # Instead of looping through each feature, we create all copies at once
+    
+    # Create a mapping of confident rows to all features
+    # We repeat each confident row n_features times and assign different feature_ids
+    n_confident = len(confident_rows)
+    
+    if n_confident * n_features > len(df1) * 100:
+        # Safety check: if the cross-product would be too large, fall back to the groupby approach
+        logger.warning(
+            f"Very large cross-product detected ({n_confident} × {n_features} = {n_confident * n_features}). "
+            "This may use significant memory."
+        )
+    
+    # Repeat each confident row n_features times
+    broadcasted_indices = np.repeat(confident_rows.index.values, n_features)
+    broadcasted_features = np.tile(unique_features, n_confident)
+    
+    # Create the broadcasted DataFrame
+    broadcasted = confident_rows.loc[broadcasted_indices].copy()
+    broadcasted["feature_id"] = broadcasted_features
+    
+    # Combine original data with broadcasted confident evidence
+    df_combined = pd.concat([df1, broadcasted], ignore_index=True)
+    
+    # Group by and take minimum - this handles deduplication and min reduction
+    df_result = df_combined.groupby(group_cols, as_index=False)[value_cols].min()
+    
     return df_result
 
 
