@@ -463,6 +463,8 @@ class IPFIOConfig(BaseIOConfig):
         propagate_signal_across_runs (bool): Propagate signal across runs (requires alignment step).
         ipf_max_alignment_pep (float): Maximum PEP to consider for good alignments.
         across_run_confidence_threshold (float): Maximum PEP threshold for propagating signal across runs for aligned features.
+        use_alignment_candidates (bool): Use FEATURE_MS2_ALIGNMENT_CANDIDATE instead of FEATURE_MS2_ALIGNMENT when available.
+        min_alignment_mapping_confidence (float): Minimum MAPPING_CONFIDENCE required when using FEATURE_MS2_ALIGNMENT_CANDIDATE.
     """
 
     ipf_ms1_scoring: bool = True
@@ -476,6 +478,8 @@ class IPFIOConfig(BaseIOConfig):
     propagate_signal_across_runs: bool = False
     ipf_max_alignment_pep: float = 0.7
     across_run_confidence_threshold: float = 0.5
+    use_alignment_candidates: bool = False
+    min_alignment_mapping_confidence: float = 0.5
 
     @classmethod
     def from_cli_args(
@@ -496,6 +500,8 @@ class IPFIOConfig(BaseIOConfig):
         propagate_signal_across_runs,
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
+        use_alignment_candidates=False,
+        min_alignment_mapping_confidence=0.5,
     ):
         """
         Creates a configuration object from command-line arguments.
@@ -517,6 +523,8 @@ class IPFIOConfig(BaseIOConfig):
             propagate_signal_across_runs=propagate_signal_across_runs,
             ipf_max_alignment_pep=ipf_max_alignment_pep,
             across_run_confidence_threshold=across_run_confidence_threshold,
+            use_alignment_candidates=use_alignment_candidates,
+            min_alignment_mapping_confidence=min_alignment_mapping_confidence,
         )
 
 

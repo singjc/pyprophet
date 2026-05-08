@@ -96,6 +96,19 @@ from ..glyco.glycoform import infer_glycoforms
     type=float,
     help="Maximum PEP to consider for propagating signal across runs for aligned features.",
 )
+@click.option(
+    "--use_alignment_candidates/--no-use_alignment_candidates",
+    default=False,
+    show_default=True,
+    help="Use FEATURE_MS2_ALIGNMENT_CANDIDATE for across-run alignment groups when available.",
+)
+@click.option(
+    "--min_alignment_mapping_confidence",
+    default=0.5,
+    show_default=True,
+    type=float,
+    help="Minimum MAPPING_CONFIDENCE to keep selected candidate alignments when using FEATURE_MS2_ALIGNMENT_CANDIDATE.",
+)
 @click.pass_context
 @measure_memory_usage_and_time
 @logger.catch(reraise=True)
@@ -114,6 +127,8 @@ def ipf(
     propagate_signal_across_runs,
     ipf_max_alignment_pep,
     across_run_confidence_threshold,
+    use_alignment_candidates,
+    min_alignment_mapping_confidence,
 ):
     """
     Infer peptidoforms after scoring of MS1, MS2 and transition-level data.
@@ -147,6 +162,8 @@ def ipf(
         propagate_signal_across_runs,
         ipf_max_alignment_pep,
         across_run_confidence_threshold,
+        use_alignment_candidates,
+        min_alignment_mapping_confidence,
     )
     write_logfile(
         ctx.obj["LOG_LEVEL"], f"{config.prefix}_pyp_ipf.log", ctx.obj["LOG_HEADER"]
