@@ -299,6 +299,62 @@ class OSWReader(BaseOSWReader):
 
     def _fetch_alignment_features_duckdb(self, con):
         pep_threshold = self.config.ipf_max_alignment_pep
+        use_alignment_candidates = self.config.use_alignment_candidates
+        min_confidence = self.config.min_alignment_mapping_confidence
+
+        if use_alignment_candidates:
+            if check_duckdb_table(con, "main", "FEATURE_MS2_ALIGNMENT_CANDIDATE"):
+                logger.info(
+                    "Using FEATURE_MS2_ALIGNMENT_CANDIDATE for across-run alignment groups "
+                    f"with MAPPING_CONFIDENCE >= {min_confidence}."
+                )
+                query = f"""
+                    SELECT
+                        DENSE_RANK() OVER (ORDER BY merged.PRECURSOR_ID, merged.ALIGNMENT_ID) AS ALIGNMENT_GROUP_ID,
+                        merged.ALIGNMENT_ID,
+                        merged.FEATURE_ID,
+                        merged.PRECURSOR_ID,
+                        merged.FEATURE_TYPE
+                    FROM (
+                        SELECT DISTINCT
+                            fmac.ALIGNMENT_ID,
+                            fmac.REFERENCE_FEATURE_ID AS FEATURE_ID,
+                            fmac.PRECURSOR_ID,
+                            'REFERENCE' AS FEATURE_TYPE
+                        FROM osw.FEATURE_MS2_ALIGNMENT_CANDIDATE AS fmac
+                        WHERE fmac.SELECTED = 1
+                        AND fmac.MAPPING_CONFIDENCE >= {min_confidence}
+                        AND fmac.REFERENCE_FEATURE_ID != fmac.ALIGNED_FEATURE_ID
+                        AND fmac.ALIGNED_FEATURE_ID != -1
+
+                        UNION
+
+                        SELECT DISTINCT
+                            fmac.ALIGNMENT_ID,
+                            fmac.ALIGNED_FEATURE_ID AS FEATURE_ID,
+                            fmac.PRECURSOR_ID,
+                            'QUERY' AS FEATURE_TYPE
+                        FROM osw.FEATURE_MS2_ALIGNMENT_CANDIDATE AS fmac
+                        WHERE fmac.SELECTED = 1
+                        AND fmac.MAPPING_CONFIDENCE >= {min_confidence}
+                        AND fmac.REFERENCE_FEATURE_ID != fmac.ALIGNED_FEATURE_ID
+                        AND fmac.ALIGNED_FEATURE_ID != -1
+                    ) AS merged
+                    ORDER BY
+                        ALIGNMENT_GROUP_ID,
+                        CASE merged.FEATURE_TYPE
+                            WHEN 'REFERENCE' THEN 0
+                            WHEN 'QUERY' THEN 1
+                        END;
+                """
+
+                df = con.execute(query).fetchdf()
+                return df.rename(columns=str.lower)
+
+            logger.warning(
+                "Requested FEATURE_MS2_ALIGNMENT_CANDIDATE for IPF propagation, "
+                "but the table was not found. Falling back to FEATURE_MS2_ALIGNMENT."
+            )
 
         if not check_duckdb_table(
             con, "main", "FEATURE_MS2_ALIGNMENT"
@@ -534,6 +590,64 @@ class OSWReader(BaseOSWReader):
 
     def _fetch_alignment_features_sqlite(self, con):
         pep_threshold = self.config.ipf_max_alignment_pep
+        use_alignment_candidates = self.config.use_alignment_candidates
+        min_confidence = self.config.min_alignment_mapping_confidence
+
+        if use_alignment_candidates:
+            if check_sqlite_table(con, "FEATURE_MS2_ALIGNMENT_CANDIDATE"):
+                logger.info(
+                    "Using FEATURE_MS2_ALIGNMENT_CANDIDATE for across-run alignment groups "
+                    f"with MAPPING_CONFIDENCE >= {min_confidence}."
+                )
+                query = """
+                    SELECT
+                        DENSE_RANK() OVER (ORDER BY PRECURSOR_ID, ALIGNMENT_ID) AS ALIGNMENT_GROUP_ID,
+                        ALIGNMENT_ID,
+                        FEATURE_ID,
+                        PRECURSOR_ID,
+                        FEATURE_TYPE
+                    FROM (
+                        SELECT DISTINCT
+                            ALIGNMENT_ID,
+                            PRECURSOR_ID,
+                            REFERENCE_FEATURE_ID AS FEATURE_ID,
+                            'REFERENCE' AS FEATURE_TYPE
+                        FROM FEATURE_MS2_ALIGNMENT_CANDIDATE
+                        WHERE SELECTED = 1
+                        AND MAPPING_CONFIDENCE >= ?
+                        AND REFERENCE_FEATURE_ID != ALIGNED_FEATURE_ID
+                        AND ALIGNED_FEATURE_ID != -1
+
+                        UNION
+
+                        SELECT DISTINCT
+                            ALIGNMENT_ID,
+                            PRECURSOR_ID,
+                            ALIGNED_FEATURE_ID AS FEATURE_ID,
+                            'QUERY' AS FEATURE_TYPE
+                        FROM FEATURE_MS2_ALIGNMENT_CANDIDATE
+                        WHERE SELECTED = 1
+                        AND MAPPING_CONFIDENCE >= ?
+                        AND REFERENCE_FEATURE_ID != ALIGNED_FEATURE_ID
+                        AND ALIGNED_FEATURE_ID != -1
+                    ) AS feature_list
+                    ORDER BY
+                        ALIGNMENT_GROUP_ID,
+                        CASE FEATURE_TYPE
+                            WHEN 'REFERENCE' THEN 0
+                            WHEN 'QUERY' THEN 1
+                        END
+                """
+
+                df = pd.read_sql_query(
+                    query, con, params=[min_confidence, min_confidence]
+                )
+                return df.rename(columns=str.lower)
+
+            logger.warning(
+                "Requested FEATURE_MS2_ALIGNMENT_CANDIDATE for IPF propagation, "
+                "but the table was not found. Falling back to FEATURE_MS2_ALIGNMENT."
+            )
 
         if not check_sqlite_table(
             con, "FEATURE_MS2_ALIGNMENT"
